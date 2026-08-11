@@ -13,6 +13,7 @@ extends CharacterBody3D
 signal stance_changed(new_stance: int)
 signal momentum_banked(speed: float)
 signal drummed(origin: Vector3)
+signal spat(origin: Vector3, direction: Vector3)
 
 enum Stance { SCURRY, HOP }
 enum State {
@@ -81,12 +82,26 @@ const SCURRY_SHAPE_RADIUS := 0.26
 @export var drum_fall_speed := 30.0
 @export var drum_radius := 4.0
 
+@export_group("Spit")
+@export var spit_scene: PackedScene
+@export var spit_cooldown := 0.32
+## Pushed clear of the snout so the shot does not spawn inside the player's own head.
+@export var spit_muzzle_offset := 0.22
+
+@export_group("Pouch")
+## Full cheeks make you heavier off the ground. Deliberately small: the conversion gap is
+## dimensioned for an empty pouch, and a large penalty would make the level's gating look
+## broken rather than reading as a cost you chose to carry.
+@export var pouch_weight_penalty := 0.1
+## Fraction of the load scattered by falling out of the level.
+@export var pouch_loss_on_fall := 0.5
+
 @export_group("Pose")
 @export var pose_speed := 12.0
 @export var facing_speed := 18.0
 @export var crouch_dip := 0.22
 @export var cheek_max_scale := 2.2
-@export var cheek_full_at := 12
+@export var spit_kick_deg := 18.0
 
 ## Per-part poses. Rotating the whole rig to go quadrupedal just face-plants the creature:
 ## the head ends up buried and the tail points at the sky. Each part has to be placed.
@@ -138,6 +153,8 @@ var _buffered_leap := 0.0
 var _drum_rise_timer := 0.0
 var _spawn_transform: Transform3D
 var _cheek_scale := 1.0
+var _spit_timer := 0.0
+var _spit_kick := 0.0
 
 @onready var collision: CollisionShape3D = $Collision
 @onready var head_room: ShapeCast3D = $HeadRoom
@@ -146,6 +163,7 @@ var _cheek_scale := 1.0
 @onready var ear_r: Node3D = $Body/Head/EarR
 @onready var cheek_l: Node3D = $Body/Head/CheekL
 @onready var cheek_r: Node3D = $Body/Head/CheekR
+@onready var snout: Node3D = $Body/Head/Snout
 @onready var cam_pivot: Node3D = $CamPivot
 
 
@@ -156,7 +174,8 @@ func _ready() -> void:
 	collision.shape = collision.shape.duplicate()
 	head_room.add_exception(self)
 	_apply_stance(Stance.HOP)
-	GameState.seeds_changed.connect(_on_seeds_changed)
+	GameState.pouch_changed.connect(_on_pouch_changed)
+	_on_pouch_changed(GameState.pouch, GameState.pouch_capacity)
 
 
 func _physics_process(delta: float) -> void:
@@ -169,6 +188,11 @@ func _physics_process(delta: float) -> void:
 		_buffered_leap = leap_buffer
 	if Input.is_action_just_pressed("swap_stance"):
 		_swap_stance()
+	# Spitting works in both stances. It is a cheek action rather than a leg action, so
+	# gating it on stance would be arbitrary, and it gives scurry its only verb besides
+	# running fast.
+	if Input.is_action_just_pressed("spit") and state != State.HOP_DRUM:
+		_try_spit()
 
 	var input_dir := _input_direction()
 
@@ -192,7 +216,7 @@ func _physics_process(delta: float) -> void:
 	_update_pose(delta)
 
 	if global_position.y < kill_y:
-		_respawn()
+		_fall_out()
 
 
 # --- states ------------------------------------------------------------------
@@ -343,7 +367,7 @@ func _has_headroom() -> bool:
 
 func _launch(input_dir: Vector3) -> void:
 	var t := maxf(charge / maxf(charge_time, 0.001), momentum_charge)
-	velocity.y = _launch_speed_for(lerpf(hop_tap_height, hop_max_height, t))
+	velocity.y = _launch_speed_for(lerpf(hop_tap_height, hop_max_height, t) * _pouch_weight())
 
 	var current := _horizontal()
 	var carry := maxf(current.length(), momentum_speed)
@@ -361,6 +385,33 @@ func _launch(input_dir: Vector3) -> void:
 	momentum_charge = 0.0
 	twist_used = false
 	_set_state(State.HOP_AIR)
+
+
+## Spend a cheek seed to fire one along the camera's aim. Aimed rather than fired straight
+## ahead, because the pods worth shooting are hung where you cannot walk.
+func _try_spit() -> void:
+	if _spit_timer > 0.0 or spit_scene == null:
+		return
+	if not GameState.spend_seed():
+		return
+	_spit_timer = spit_cooldown
+
+	var dir: Vector3 = cam_pivot.aim_direction()
+	var origin: Vector3 = snout.global_position + dir * spit_muzzle_offset
+	var shot: Node3D = spit_scene.instantiate()
+	get_parent().add_child(shot)
+	shot.launch(origin, dir, get_rid())
+
+	# Snap to face the shot so the recoil and the projectile agree with each other.
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	if flat.length() > 0.01:
+		facing = flat.normalized()
+	_spit_kick = 1.0
+	spat.emit(origin, dir)
+
+
+func _pouch_weight() -> float:
+	return 1.0 - pouch_weight_penalty * GameState.pouch_ratio()
 
 
 func _try_twist(input_dir: Vector3) -> void:
@@ -480,6 +531,8 @@ func _consume_leap() -> bool:
 
 func _tick_timers(delta: float) -> void:
 	_buffered_leap = maxf(0.0, _buffered_leap - delta)
+	_spit_timer = maxf(0.0, _spit_timer - delta)
+	_spit_kick = maxf(0.0, _spit_kick - delta * 7.0)
 	if momentum_timer > 0.0:
 		momentum_timer = maxf(0.0, momentum_timer - delta)
 		if is_zero_approx(momentum_timer):
@@ -489,6 +542,13 @@ func _tick_timers(delta: float) -> void:
 
 func _set_state(new_state: int) -> void:
 	state = new_state
+
+
+## Dropping out of the level scatters part of the load. The manual respawn key stays a
+## clean debug reset, or it would just be a free way to dodge the penalty.
+func _fall_out() -> void:
+	GameState.spill_pouch(pouch_loss_on_fall)
+	_respawn()
 
 
 func _respawn() -> void:
@@ -512,8 +572,13 @@ func _update_pose(delta: float) -> void:
 	for part in pose:
 		var node: Node3D = body.get_node(part)
 		var target: Dictionary = pose[part]
+		var rot: Vector3 = target["rot"]
+		# Fold the spit recoil into the head's target rather than adding it afterwards, so
+		# it settles back on its own instead of fighting the pose lerp.
+		if part == "Head":
+			rot += Vector3(-spit_kick_deg * _spit_kick, 0.0, 0.0)
 		node.position = node.position.lerp(target["pos"], weight)
-		node.rotation_degrees = node.rotation_degrees.lerp(target["rot"], weight)
+		node.rotation_degrees = node.rotation_degrees.lerp(rot, weight)
 		node.scale = node.scale.lerp(target["scale"], weight)
 
 	# Compressing for a leap dips the whole body so charge level is readable at a glance.
@@ -540,9 +605,10 @@ func _update_pose(delta: float) -> void:
 	cheek_r.scale = cheek_r.scale.lerp(cheek, weight)
 
 
-func _on_seeds_changed(collected: int, _total: int) -> void:
-	var fill := clampf(float(collected) / maxf(float(cheek_full_at), 1.0), 0.0, 1.0)
-	_cheek_scale = lerpf(1.0, cheek_max_scale, fill)
+## Cheeks track what is actually being carried, so they swell on the way out and deflate at
+## the burrow. Reading the pouch off the character is the point of having pouches.
+func _on_pouch_changed(_pouch: int, _capacity: int) -> void:
+	_cheek_scale = lerpf(1.0, cheek_max_scale, GameState.pouch_ratio())
 
 
 # --- level hooks -------------------------------------------------------------

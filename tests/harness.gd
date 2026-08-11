@@ -9,7 +9,7 @@ extends Node
 
 const ACTIONS := [
 	"move_forward", "move_back", "move_left", "move_right",
-	"leap", "swap_stance", "drum", "tail_twist",
+	"leap", "swap_stance", "drum", "tail_twist", "spit",
 ]
 
 const STANCE_SCURRY := 0
@@ -57,6 +57,18 @@ func run_all() -> void:
 	await check_parasail_reaches_pad()
 	await check_ballistic_misses_pad()
 	await check_drum_breaks_slab()
+	await check_spit_spends_a_seed()
+	await check_empty_pouch_cannot_spit()
+	await check_one_seed_is_one_seed()
+	await check_full_pouch_refuses_pickups()
+	await check_burrow_banks_the_pouch()
+	await check_pod_pays_back_the_shot()
+	await check_gate_blocks_the_stash()
+	await check_latch_drops_the_gate()
+	await check_open_gate_admits_the_player()
+	await check_full_pouch_still_clears_gap()
+	await check_full_pouch_costs_leap_height()
+	await check_falling_spills_the_pouch()
 
 
 # --- checks ------------------------------------------------------------------
@@ -213,6 +225,192 @@ func check_drum_breaks_slab() -> void:
 	)
 
 
+func check_spit_spends_a_seed() -> void:
+	await reset(Vector3(0, 0.4, 0), STANCE_HOP)
+	GameState.pocket_seeds(4)
+	var before: int = GameState.pouch
+	await press_tap("spit")
+	await steps(3)
+	report(
+		"spitting spends a pouch seed",
+		GameState.pouch == before - 1,
+		"pouch %d -> %d" % [before, GameState.pouch]
+	)
+
+
+func check_empty_pouch_cannot_spit() -> void:
+	await reset(Vector3(0, 0.4, 0), STANCE_HOP)
+	var before := count_shots()
+	await press_tap("spit")
+	await steps(3)
+	report(
+		"an empty pouch has nothing to spit",
+		count_shots() == before,
+		"%d shot(s) in flight" % (count_shots() - before)
+	)
+
+
+## Regression guard. Pocketing a seed emits a change signal that every seed listens to in
+## order to re-offer itself, which once let a single seed keep accepting itself until the
+## pouch was full. Nothing else in the suite would notice, since the other pouch checks set
+## their contents by hand.
+func check_one_seed_is_one_seed() -> void:
+	await reset(Vector3(2.0, 0.4, -2.0), STANCE_HOP)
+	var pip: Node3D = load("res://scenes/seed.tscn").instantiate()
+	pip.set("bonus", true)
+	pip.position = Vector3(2.0, 0.9, -2.0)
+	get_node("Main").add_child(pip)
+	await steps(20)
+	report("one seed adds exactly one seed", GameState.pouch == 1, "pouch=%d" % GameState.pouch)
+
+
+func check_full_pouch_refuses_pickups() -> void:
+	await reset(Vector3(-4, 0.4, 0), STANCE_SCURRY)
+	GameState.pocket_seeds(GameState.pouch_capacity)
+	# A seed of our own rather than one from the level, whose fate earlier checks own.
+	var pip: Node3D = load("res://scenes/seed.tscn").instantiate()
+	pip.set("bonus", true)
+	pip.position = Vector3(-4, 0.9, 0)
+	get_node("Main").add_child(pip)
+	await steps(30)
+	report(
+		"a full pouch leaves the seed in the world",
+		is_instance_valid(pip) and GameState.pouch == GameState.pouch_capacity,
+		"seed still there=%s pouch=%d" % [is_instance_valid(pip), GameState.pouch]
+	)
+
+	# Making room must re-offer it without the player having to step off and back on.
+	GameState.spend_seed()
+	await steps(30)
+	report(
+		"freeing pouch space re-offers the refused seed",
+		not is_instance_valid(pip),
+		"pouch=%d" % GameState.pouch
+	)
+
+
+func check_burrow_banks_the_pouch() -> void:
+	await reset(Vector3(-10, 0.4, 10), STANCE_HOP)
+	var stored_before: int = GameState.seeds_stored
+	GameState.pocket_seeds(5)
+	await steps(30)
+	report(
+		"standing on the burrow banks the whole pouch",
+		GameState.pouch == 0 and GameState.seeds_stored == stored_before + 5,
+		"pouch=%d stored %d -> %d" % [GameState.pouch, stored_before, GameState.seeds_stored]
+	)
+
+
+func check_pod_pays_back_the_shot() -> void:
+	await reset(Vector3(-6, 0.4, -14), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	var dropped_before := count_bonus_seeds()
+	await aim_at(Vector3(-6, 4.6, -9.2))
+	await press_tap("spit")
+	await steps(120)
+	var gained := count_bonus_seeds() - dropped_before
+	report(
+		"a spat pod drops back more seeds than the shot cost",
+		gained >= 2,
+		"spent 1, dropped %d" % gained
+	)
+
+
+## Must run before the latch check, which opens the gate for good.
+func check_gate_blocks_the_stash() -> void:
+	await reset(Vector3(6.0, 0.4, -9.0), STANCE_SCURRY)
+	Input.action_press("move_right")
+	await steps(120)
+	var x: float = player.global_position.x
+	release_all()
+	report("the closed gate keeps you out of the stash", x < 9.1, "stopped at x=%.2f" % x)
+
+
+func check_latch_drops_the_gate() -> void:
+	var gate: Node3D = get_node_or_null("Main/StashGate")
+	if gate == null:
+		report("spitting the latch drops the stash gate", false, "no StashGate in the level")
+		return
+	await reset(Vector3(0, 0.4, -9), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	var before: float = gate.position.y
+	await aim_at(Vector3(8.87, 2.5, -9))
+	await press_tap("spit")
+	await steps(150)
+	report(
+		"spitting the latch drops the stash gate",
+		gate.position.y < before - 1.5,
+		"gate y %.2f -> %.2f" % [before, gate.position.y]
+	)
+
+
+## Proving the gate moved is not the same as proving it granted anything.
+func check_open_gate_admits_the_player() -> void:
+	await reset(Vector3(6.0, 0.4, -9.0), STANCE_SCURRY)
+	Input.action_press("move_right")
+	await steps(150)
+	var x: float = player.global_position.x
+	var picked: int = GameState.pouch
+	release_all()
+	report(
+		"the opened gate admits you to the stashed seeds",
+		x > 10.5 and picked > 0,
+		"reached x=%.2f with %d seed(s)" % [x, picked]
+	)
+
+
+func check_full_pouch_still_clears_gap() -> void:
+	# The gap is dimensioned for an empty pouch. Carrying a full load must cost distance
+	# without silently turning the level's centrepiece into a coin flip.
+	await reset(Vector3(0, 0.4, 14.0), STANCE_SCURRY)
+	GameState.pocket_seeds(GameState.pouch_capacity)
+	Input.action_press("move_back")
+	await run_until_z(TAKEOFF_Z)
+	await press_tap("swap_stance")
+	await press_tap("leap")
+	var result := await settle(300)
+	release_all()
+	report(
+		"a converted leap still clears the gap with full cheeks",
+		result.on_ledge,
+		"pouch=%d landed z=%.2f y=%.2f" % [GameState.pouch, result.pos.z, result.pos.y]
+	)
+
+
+## The gap check above proves a full load still clears, which on its own would also be true
+## if the weight penalty did nothing at all. Measure the apex directly so the cost is known
+## to exist and known to be small.
+func check_full_pouch_costs_leap_height() -> void:
+	var empty := await vertical_leap(Vector3(-15.5, 0.4, 0), 0.75)
+	await reset(Vector3(-15.5, 0.4, 0), STANCE_HOP)
+	GameState.pocket_seeds(GameState.pouch_capacity)
+	var full := await loaded_vertical_leap(Vector3(-15.5, 0.4, 0), 0.75)
+	var loss := empty - full
+	report(
+		"full cheeks cost leap height, but only a little",
+		loss > 0.2 and loss < 0.9,
+		"apex %.2f empty, %.2f full (-%.2f)" % [empty, full, loss]
+	)
+
+
+func check_falling_spills_the_pouch() -> void:
+	await reset(Vector3(0, 0.4, 24), STANCE_HOP)
+	var carried := GameState.pocket_seeds(8)
+	var saved: float = player.kill_y
+	player.kill_y = -14.0
+	player.global_position = Vector3(0, -4.0, 39.0)
+	for i in 300:
+		await get_tree().physics_frame
+		if GameState.pouch < carried:
+			break
+	player.kill_y = saved
+	report(
+		"falling out of the level scatters half the load",
+		GameState.pouch == carried / 2,
+		"carried %d, kept %d" % [carried, GameState.pouch]
+	)
+
+
 # --- driving helpers ---------------------------------------------------------
 
 
@@ -243,6 +441,12 @@ func leap_from(from: Vector3, charge_seconds: float, parasail: bool) -> Dictiona
 ## Measure peak height gained from a standing charged leap.
 func vertical_leap(from: Vector3, charge_seconds: float) -> float:
 	await reset(from, STANCE_HOP)
+	return await loaded_vertical_leap(from, charge_seconds)
+
+
+## Same measurement without the reset, for checks that need to set up a pouch first (reset
+## deliberately empties it).
+func loaded_vertical_leap(_from: Vector3, charge_seconds: float) -> float:
 	await steps(6)
 	var base: float = player.global_position.y
 	Input.action_press("leap")
@@ -282,8 +486,54 @@ func settle(max_frames: int) -> Dictionary:
 	return {"pos": pos, "on_ledge": pos.y > 2.5 and pos.z > LEDGE_Z - 0.5}
 
 
+## Point the rig so a spit passes through a world position, solving for the flat trajectory
+## rather than aiming straight at it: the shot arcs, and over the distances the level uses
+## the drop is bigger than the targets are.
+func aim_at(target: Vector3) -> void:
+	var rig: Node = player.get_node("CamPivot")
+	var shot: Node = load("res://scenes/seed_shot.tscn").instantiate()
+	var v: float = shot.speed
+	var g: float = shot.shot_gravity
+	shot.free()
+
+	var muzzle: Vector3 = player.get_node("Body/Head/Snout").global_position
+	var delta := target - muzzle
+	var flat := Vector3(delta.x, 0.0, delta.z)
+	var d := flat.length()
+	var h := delta.y
+
+	var pitch := atan2(h, d)
+	var disc := v * v * v * v - g * (g * d * d + 2.0 * h * v * v)
+	if disc >= 0.0 and d > 0.01:
+		pitch = atan2(v * v - sqrt(disc), g * d)
+
+	rig.set("_yaw", atan2(-delta.x, -delta.z))
+	rig.set("_pitch", pitch)
+	await get_tree().physics_frame
+
+
+func count_shots() -> int:
+	return get_tree().get_nodes_in_group("seed_shot").size()
+
+
+func count_bonus_seeds() -> int:
+	var total := 0
+	for node in get_tree().get_nodes_in_group("seed"):
+		if node.get("bonus"):
+			total += 1
+	return total
+
+
 func reset(pos: Vector3, stance: int) -> void:
 	release_all()
+	# Carried seeds add weight, so leaving them between checks would let one measurement
+	# quietly change the next one.
+	GameState.clear_pouch()
+	# Same reasoning for the rig: aiming a spit rotates it, and movement input is expressed
+	# relative to it, so a stale yaw silently redefines which way "forward" means.
+	var rig: Node = player.get_node("CamPivot")
+	rig.set("_yaw", 0.0)
+	rig.set("_pitch", 0.0)
 	player.velocity = Vector3.ZERO
 	player.global_position = pos
 	player.momentum_speed = 0.0

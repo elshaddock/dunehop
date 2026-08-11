@@ -22,7 +22,9 @@ extends Node3D
 @export var mouse_sensitivity := 0.0022
 @export var stick_speed := 2.6
 @export var min_pitch_deg := -68.0
-@export var max_pitch_deg := 30.0
+## Generous upward range because this doubles as the spit's elevation: pods are hung out
+## of reach, and a 30-degree ceiling would put half of them behind an invisible wall.
+@export var max_pitch_deg := 50.0
 @export var frame_blend := 5.0
 
 @export_group("Auto align")
@@ -109,3 +111,12 @@ func _apply_framing(delta: float) -> void:
 
 	rotation.y = _yaw
 	rotation.x = clampf(_pitch + _pitch_bias, lo, hi)
+
+
+## Where the player is deliberately looking, for the spit to travel along.
+##
+## This excludes the stance framing tilt on purpose. That tilt exists to compose the shot,
+## not to express intent, and folding it in would make a neutral look spit at the dirt a
+## few metres ahead.
+func aim_direction() -> Vector3:
+	return Basis(Vector3.UP, _yaw) * Basis(Vector3.RIGHT, _pitch) * Vector3.FORWARD

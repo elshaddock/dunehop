@@ -1,9 +1,17 @@
 extends CanvasLayer
 
-## Prototype readout. The banked meter is the important one: the conversion window is
-## invisible otherwise, and you cannot learn to time something you cannot see.
+## Prototype readout.
+##
+## The banked-momentum meter is still the important one, since the conversion window is
+## invisible otherwise and you cannot learn to time something you cannot see. The pouch row
+## is second: it is simultaneously your score, your ammunition and the thing that gets
+## heavier as you fill it, so it has to be legible at a glance.
 
-@onready var seeds_label: Label = %Seeds
+const POUCH_NORMAL := Color(1, 0.855, 0.6)
+const POUCH_FULL := Color(1, 0.494, 0.372)
+
+@onready var stored_label: Label = %Stored
+@onready var pouch_label: Label = %Pouch
 @onready var stance_label: Label = %Stance
 @onready var speed_label: Label = %Speed
 @onready var charge_bar: ProgressBar = %ChargeBar
@@ -13,8 +21,10 @@ var _player: Node = null
 
 
 func _ready() -> void:
-	GameState.seeds_changed.connect(_on_seeds_changed)
-	_on_seeds_changed(GameState.seeds_collected, GameState.seeds_total)
+	GameState.pouch_changed.connect(_on_pouch_changed)
+	GameState.stored_changed.connect(_on_stored_changed)
+	_on_pouch_changed(GameState.pouch, GameState.pouch_capacity)
+	_on_stored_changed(GameState.seeds_stored)
 
 
 func _process(_delta: float) -> void:
@@ -30,5 +40,13 @@ func _process(_delta: float) -> void:
 	momentum_bar.value = _player.momentum_ratio()
 
 
-func _on_seeds_changed(collected: int, total: int) -> void:
-	seeds_label.text = "Seeds   %d / %d" % [collected, total]
+func _on_pouch_changed(pouch: int, capacity: int) -> void:
+	var full := pouch >= capacity
+	pouch_label.text = "Pouch   %d / %d%s" % [pouch, capacity, "   FULL" if full else ""]
+	pouch_label.add_theme_color_override(
+		"font_color", POUCH_FULL if full else POUCH_NORMAL
+	)
+
+
+func _on_stored_changed(stored: int) -> void:
+	stored_label.text = "Stored   %d" % stored

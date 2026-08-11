@@ -53,6 +53,30 @@ func _ready() -> void:
 	cam.look_at(Vector3(0, 2.0, 46.0))
 	await capture("conversion_gap")
 
+	# The burrow, with full cheeks so the pouch swelling is visible.
+	GameState.pocket_seeds(GameState.pouch_capacity)
+	player.global_position = Vector3(-7.5, 0.4, 12.5)
+	set_stance(1, 2)
+	await settle(30)
+	cam.global_position = Vector3(-5.0, 2.6, 15.5)
+	cam.look_at(Vector3(-10, 0.3, 10))
+	await capture("burrow")
+
+	# The latch-gated stash hut, seen from where you would stand to spit at it.
+	GameState.clear_pouch()
+	player.global_position = Vector3(3.0, 0.4, -9.0)
+	await settle(30)
+	cam.global_position = Vector3(1.0, 2.2, -8.6)
+	cam.look_at(Vector3(9.4, 1.9, -9.0))
+	await capture("stash_latch")
+
+	# A pod hung off the camera tower, out of reach on purpose.
+	player.global_position = Vector3(-6.0, 0.4, -14.0)
+	await settle(30)
+	cam.global_position = Vector3(-6.2, 2.2, -16.5)
+	cam.look_at(Vector3(-6, 4.6, -9.2))
+	await capture("seed_pod")
+
 	# Whole level from above.
 	cam.global_position = Vector3(46, 62, 30)
 	cam.look_at(Vector3(-6, 0, -18))
