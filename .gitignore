@@ -1,0 +1,10 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Exported builds
+build/
+export_presets.cfg
+
+# Visual-check renders produced by tests/shots.tscn
+tests/shot_*.png
