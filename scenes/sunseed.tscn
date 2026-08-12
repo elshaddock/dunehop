@@ -1,0 +1,75 @@
+[gd_scene load_steps=9 format=3 uid="uid://cx3sunseed0001"]
+
+[ext_resource type="Script" path="res://scripts/sunseed.gd" id="1_sunseed"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_core"]
+albedo_color = Color(1, 0.859, 0.353, 1)
+roughness = 0.28
+emission_enabled = true
+emission = Color(1, 0.71, 0.208, 1)
+emission_energy_multiplier = 3.4
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_husk"]
+transparency = 1
+albedo_color = Color(1, 0.784, 0.361, 0.235)
+roughness = 0.6
+emission_enabled = true
+emission = Color(1, 0.647, 0.267, 1)
+emission_energy_multiplier = 1.1
+
+[sub_resource type="SphereMesh" id="SphereMesh_core"]
+material = SubResource("StandardMaterial3D_core")
+radius = 0.26
+height = 0.52
+radial_segments = 16
+rings = 10
+
+[sub_resource type="PrismMesh" id="PrismMesh_husk"]
+material = SubResource("StandardMaterial3D_husk")
+size = Vector3(0.72, 0.9, 0.72)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_beacon"]
+transparency = 1
+blend_mode = 1
+shading_mode = 0
+albedo_color = Color(1, 0.804, 0.373, 0.11)
+disable_receive_shadows = true
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_beacon"]
+material = SubResource("StandardMaterial3D_beacon")
+top_radius = 0.1
+bottom_radius = 0.24
+height = 16.0
+radial_segments = 10
+rings = 1
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_pickup"]
+radius = 0.85
+
+[node name="Sunseed" type="Area3D"]
+collision_layer = 0
+collision_mask = 1
+monitorable = false
+script = ExtResource("1_sunseed")
+
+[node name="Pivot" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55, 0)
+
+[node name="Core" type="MeshInstance3D" parent="Pivot"]
+mesh = SubResource("SphereMesh_core")
+
+[node name="Husk" type="MeshInstance3D" parent="Pivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.12, 0)
+mesh = SubResource("PrismMesh_husk")
+
+[node name="HuskBack" type="MeshInstance3D" parent="Pivot"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 0, 0.12, 0)
+mesh = SubResource("PrismMesh_husk")
+
+[node name="Beacon" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 8, 0)
+mesh = SubResource("CylinderMesh_beacon")
+
+[node name="Collision" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55, 0)
+shape = SubResource("SphereShape3D_pickup")

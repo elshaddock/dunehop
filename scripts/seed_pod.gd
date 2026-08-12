@@ -47,6 +47,7 @@ func on_spit(_from: Vector3) -> void:
 		return
 	_burst = true
 	_shape.disabled = true
+	Sfx.play_at("pod_burst", global_position, 0.0)
 	_scatter()
 
 	var tween := create_tween()
@@ -96,6 +97,9 @@ func _wait_to_regrow() -> void:
 func _regrow() -> void:
 	_mesh.scale = Vector3.ONE * 0.02
 	_mesh.visible = true
+	# Quiet, but it has to exist: a pod coming back within earshot is ammunition appearing
+	# behind you, and there is no reason to make the player keep checking over their shoulder.
+	Sfx.play_at("deposit", global_position, -14.0, 0.7)
 	var tween := create_tween()
 	tween.tween_property(_mesh, "scale", Vector3.ONE, 0.32)
 	tween.tween_callback(_arm)

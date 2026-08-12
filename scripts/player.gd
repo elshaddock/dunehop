@@ -81,6 +81,9 @@ const SCURRY_SHAPE_RADIUS := 0.26
 @export var drum_rise_time := 0.16
 @export var drum_fall_speed := 30.0
 @export var drum_radius := 4.0
+## Drums landing between drum_radius and this still rattle a breakable, so a near miss shows
+## you the connection instead of being indistinguishable from drumming on bare sand.
+@export var drum_notice_radius := 11.0
 
 @export_group("Spit")
 @export var spit_scene: PackedScene
@@ -165,6 +168,8 @@ var _cheek_scale := 1.0
 var _spit_timer := 0.0
 var _spit_kick := 0.0
 var _locked: Node3D = null
+## Fastest descent of the current airtime, so a landing can be voiced as hard as it was.
+var _air_fall := 0.0
 
 @onready var collision: CollisionShape3D = $Collision
 @onready var head_room: ShapeCast3D = $HeadRoom
@@ -225,6 +230,13 @@ func _physics_process(delta: float) -> void:
 		State.HOP_DRUM:
 			_hop_drum(delta)
 
+	# Sampled before the move, since move_and_slide() is what cancels the fall against the
+	# floor, and after the handlers, so the landing they queued still sees the old value.
+	_air_fall = 0.0 if is_on_floor() else maxf(_air_fall, -velocity.y)
+
+	var gliding := state == State.HOP_PARASAIL
+	Sfx.set_wind(_horizontal().length() / maxf(parasail_forward, 0.01) if gliding else 0.0)
+
 	move_and_slide()
 	_update_pose(delta)
 
@@ -240,6 +252,8 @@ func _scurry_ground(delta: float, input_dir: Vector3) -> void:
 	_ground_move(delta, input_dir, cap, scurry_accel, scurry_friction, scurry_turn_speed)
 	if _consume_leap():
 		velocity.y = _launch_speed_for(scurry_hop_height)
+		# Higher and thinner than the bipedal launch, so the two hops never sound alike.
+		Sfx.play("leap", -14.0, 1.45)
 		_set_state(State.SCURRY_AIR)
 	elif not is_on_floor():
 		_set_state(State.SCURRY_AIR)
@@ -354,6 +368,9 @@ func _swap_stance() -> void:
 		_set_state(State.SCURRY_GROUND if is_on_floor() else State.SCURRY_AIR)
 	charge = 0.0
 	_drum_rise_timer = 0.0
+	# Rising into the tall stance, falling into the low one, so the swap tells you which way
+	# you went without looking at the readout.
+	Sfx.play("swap", -15.0, 1.22 if stance == Stance.HOP else 0.86)
 
 
 func _apply_stance(new_stance: int) -> void:
@@ -381,6 +398,9 @@ func _has_headroom() -> bool:
 func _launch(input_dir: Vector3) -> void:
 	var t := maxf(charge / maxf(charge_time, 0.001), momentum_charge)
 	velocity.y = _launch_speed_for(lerpf(hop_tap_height, hop_max_height, t) * _pouch_weight())
+	# Charge is otherwise invisible at the moment it is spent: the meter empties as you leave
+	# the ground. Dropping the pitch as the leap grows lets you hear what you paid for.
+	Sfx.play("leap", lerpf(-13.0, -4.0, t), lerpf(1.24, 0.8, t))
 
 	var current := _horizontal()
 	var carry := maxf(current.length(), momentum_speed)
@@ -423,6 +443,7 @@ func _try_spit() -> void:
 		facing = flat.normalized()
 	_spit_kick = 1.0
 	cam_pivot.kick()
+	Sfx.play("spit", -10.0, randf_range(0.94, 1.08))
 	spat.emit(origin, dir)
 
 
@@ -547,14 +568,17 @@ func _start_drum() -> void:
 
 func _do_drum() -> void:
 	drummed.emit(global_position)
+	Sfx.play("drum", -4.0)
 	for node in get_tree().get_nodes_in_group("drummable"):
 		var target := node as Node3D
 		if target == null:
 			continue
-		if target.global_position.distance_to(global_position) > drum_radius:
-			continue
-		if target.has_method("on_drum"):
-			target.on_drum(global_position)
+		var distance := target.global_position.distance_to(global_position)
+		if distance <= drum_radius:
+			if target.has_method("on_drum"):
+				target.on_drum(global_position)
+		elif distance <= drum_notice_radius and target.has_method("on_drum_nearby"):
+			target.on_drum_nearby(global_position)
 
 
 func _land_hop() -> void:
@@ -586,8 +610,15 @@ func _accelerate(delta: float, dir: Vector3, cap: float, accel: float, friction:
 
 	if speed > cap + 0.01:
 		var new_dir := h / speed
-		if dir.length() > 0.05:
-			new_dir = _turn_toward(new_dir, dir, overspeed_steer * delta)
+		# Letting go of the stick has to brake, even above the cap. Overspeed used to ignore
+		# friction entirely, so a parasail landing at 6.0 against a 4.5 cap kept sliding for
+		# half a second no matter what you did, which reads as ice and walks you off ledges.
+		# Carrying speed is still the reward for holding a direction, just no longer the
+		# punishment for releasing one.
+		if dir.length() <= 0.05:
+			_set_horizontal(new_dir * move_toward(speed, cap, friction * delta))
+			return
+		new_dir = _turn_toward(new_dir, dir, overspeed_steer * delta)
 		_set_horizontal(new_dir * move_toward(speed, cap, overspeed_decay * delta))
 		return
 
@@ -657,8 +688,20 @@ func _tick_timers(delta: float) -> void:
 			momentum_charge = 0.0
 
 
+## Transitions worth hearing are voiced here rather than in the handlers, because several
+## handlers can reach the same state and each one would have to remember to make the noise.
 func _set_state(new_state: int) -> void:
+	var was := state
 	state = new_state
+	if was == new_state:
+		return
+
+	var fell_from := was in [State.SCURRY_AIR, State.HOP_AIR, State.HOP_PARASAIL]
+	var arrived := new_state in [State.SCURRY_GROUND, State.HOP_GROUND]
+	# A drum landing is deliberately silent here: its own boom is the landing.
+	if fell_from and arrived:
+		var force := clampf(_air_fall / 22.0, 0.0, 1.0)
+		Sfx.play("land", lerpf(-19.0, -5.0, force), lerpf(1.18, 0.84, force))
 
 
 ## Dropping out of the level scatters part of the load. The manual respawn key stays a

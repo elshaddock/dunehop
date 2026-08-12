@@ -36,3 +36,14 @@ func _bank() -> void:
 	var tween := create_tween()
 	tween.tween_property(_mound, "scale", Vector3(1.16, 0.78, 1.16), 0.09)
 	tween.tween_property(_mound, "scale", Vector3.ONE, 0.18)
+
+	# A tap per seed rather than one lump sound. Banking is the payoff for having carried a
+	# full pouch across the level without falling, and a longer run of taps is a bigger one.
+	var taps := mini(moved, 7)
+	var run := create_tween()
+	for i in taps:
+		var step := float(i) / float(maxi(taps - 1, 1))
+		run.tween_callback(
+			func() -> void: Sfx.play_at("deposit", global_position, -9.0, lerpf(0.88, 1.44, step))
+		)
+		run.tween_interval(0.055)

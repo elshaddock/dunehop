@@ -24,6 +24,11 @@ const RETICLE_EMPTY := Color(1, 0.45, 0.38, 0.5)
 @onready var charge_bar: ProgressBar = %ChargeBar
 @onready var momentum_bar: ProgressBar = %MomentumBar
 @onready var reticle: Label = %Reticle
+@onready var sunseed_label: Label = %Sunseeds
+@onready var toll_panel: PanelContainer = %TollPanel
+@onready var toll_label: Label = %TollLabel
+@onready var toll_bar: ProgressBar = %TollBar
+@onready var banner: Label = %Banner
 
 var _player: Node = null
 
@@ -31,8 +36,13 @@ var _player: Node = null
 func _ready() -> void:
 	GameState.pouch_changed.connect(_on_pouch_changed)
 	GameState.stored_changed.connect(_on_stored_changed)
+	GameState.sunseeds_changed.connect(_on_sunseeds_changed)
+	GameState.all_sunseeds_found.connect(_on_all_found)
 	_on_pouch_changed(GameState.pouch, GameState.pouch_capacity)
 	_on_stored_changed(GameState.seeds_stored)
+	_on_sunseeds_changed(GameState.sunseeds_found, GameState.sunseeds_total)
+	toll_panel.visible = false
+	banner.visible = false
 
 
 func _process(_delta: float) -> void:
@@ -47,6 +57,33 @@ func _process(_delta: float) -> void:
 	charge_bar.value = _player.charge_ratio()
 	momentum_bar.value = _player.momentum_ratio()
 	_update_reticle()
+	_update_toll()
+
+
+## Paying a toll is silent otherwise: the barrier sinking is easy to miss while you are
+## looking at your own feet, and "why is my seed count dropping" is a bad first thought.
+func _update_toll() -> void:
+	var gate: Node = null
+	for node in get_tree().get_nodes_in_group("seed_gate"):
+		if not node.is_open() and node.player_present():
+			gate = node
+			break
+
+	if gate == null:
+		toll_panel.visible = false
+		return
+
+	toll_panel.visible = true
+	toll_bar.value = float(gate.paid()) / float(maxi(1, gate.cost))
+	if GameState.seeds_stored > 0:
+		toll_label.text = "%s   %d / %d" % [gate.label, gate.paid(), gate.cost]
+		toll_label.add_theme_color_override("font_color", POUCH_NORMAL)
+	else:
+		# The gate is not broken, you are just carrying nothing it wants.
+		toll_label.text = "%s   %d / %d   -  bank seeds at a burrow" % [
+			gate.label, gate.paid(), gate.cost
+		]
+		toll_label.add_theme_color_override("font_color", POUCH_FULL)
 
 
 ## Draw the marker where the seed will actually come down, not at the centre of the screen.
@@ -91,3 +128,14 @@ func _on_pouch_changed(pouch: int, capacity: int) -> void:
 
 func _on_stored_changed(stored: int) -> void:
 	stored_label.text = "Stored   %d" % stored
+
+
+func _on_sunseeds_changed(found: int, total: int) -> void:
+	sunseed_label.text = "Sunseeds   %d / %d" % [found, total]
+
+
+func _on_all_found() -> void:
+	Sfx.play("fanfare", -4.0)
+	banner.visible = true
+	var tween := create_tween()
+	tween.tween_property(banner, "modulate:a", 1.0, 0.4).from(0.0)
