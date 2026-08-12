@@ -27,6 +27,22 @@ extends Node3D
 @export var max_pitch_deg := 50.0
 @export var frame_blend := 5.0
 
+@export_group("Aim")
+@export var aim_distance := 2.8
+@export var aim_height := 1.42
+## Slide off-centre so the creature is not standing in front of what you are shooting at.
+@export var aim_shoulder := 0.8
+## Zero on purpose. Outside aim mode the framing tilts down to compose the shot, but while
+## aiming that tilt would separate the view from the line of fire again.
+@export var aim_pitch_deg := 0.0
+@export var aim_sensitivity_scale := 0.45
+@export var aim_blend := 14.0
+
+@export_group("Recoil")
+@export var kick_per_shot := 0.035
+@export var kick_max := 0.09
+@export var kick_recover := 7.0
+
 @export_group("Auto align")
 ## Swinging the camera behind a fast scurry is the main thing separating a platformer
 ## camera from a debug view, but it must never fight a player who is actively looking.
@@ -34,10 +50,13 @@ extends Node3D
 @export var align_min_speed := 6.0
 @export var align_idle_delay := 0.7
 
+var aiming := false
+
 var _yaw := 0.0
 var _pitch := 0.0
 var _pitch_bias := 0.0
 var _look_idle := 999.0
+var _kick := 0.0
 
 @onready var player: CharacterBody3D = get_parent() as CharacterBody3D
 @onready var arm: SpringArm3D = $SpringArm3D
@@ -60,12 +79,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		_yaw -= event.relative.x * mouse_sensitivity
-		_pitch -= event.relative.y * mouse_sensitivity
+		var sensitivity := mouse_sensitivity * (aim_sensitivity_scale if aiming else 1.0)
+		_yaw -= event.relative.x * sensitivity
+		_pitch -= event.relative.y * sensitivity
 		_look_idle = 0.0
 
 
 func _process(delta: float) -> void:
+	aiming = Input.is_action_pressed("aim")
+	_kick = move_toward(_kick, 0.0, kick_recover * delta)
 	_read_stick(delta)
 	_auto_align(delta)
 	_apply_framing(delta)
@@ -82,6 +104,9 @@ func _read_stick(delta: float) -> void:
 
 
 func _auto_align(delta: float) -> void:
+	# Swinging the camera on its own while the player is lining up a shot is intolerable.
+	if aiming:
+		return
 	if player == null or _look_idle < align_idle_delay:
 		return
 	if not player.is_scurrying() or player.horizontal_speed() < align_min_speed:
@@ -99,9 +124,19 @@ func _apply_framing(delta: float) -> void:
 	var target_distance := scurry_distance if scurrying else hop_distance
 	var target_height := scurry_height if scurrying else hop_height
 	var target_bias := deg_to_rad(scurry_pitch_deg if scurrying else hop_pitch_deg)
+	var target_shoulder := 0.0
+	var blend := frame_blend
 
-	var weight := 1.0 - exp(-frame_blend * delta)
+	if aiming:
+		target_distance = aim_distance
+		target_height = aim_height
+		target_bias = deg_to_rad(aim_pitch_deg)
+		target_shoulder = aim_shoulder
+		blend = aim_blend
+
+	var weight := 1.0 - exp(-blend * delta)
 	arm.spring_length = lerpf(arm.spring_length, target_distance, weight)
+	arm.position.x = lerpf(arm.position.x, target_shoulder, weight)
 	position.y = lerpf(position.y, target_height, weight)
 	_pitch_bias = lerpf(_pitch_bias, target_bias, weight)
 
@@ -110,7 +145,13 @@ func _apply_framing(delta: float) -> void:
 	_pitch = clampf(_pitch, lo, hi)
 
 	rotation.y = _yaw
-	rotation.x = clampf(_pitch + _pitch_bias, lo, hi)
+	# The kick is deliberately kept out of aim_direction below: recoil should shake the view
+	# without walking your aim off the target between shots.
+	rotation.x = clampf(_pitch + _pitch_bias + _kick, lo, hi)
+
+
+func kick() -> void:
+	_kick = minf(_kick + kick_per_shot, kick_max)
 
 
 ## Where the player is deliberately looking, for the spit to travel along.

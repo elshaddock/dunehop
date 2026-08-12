@@ -10,12 +10,20 @@ extends CanvasLayer
 const POUCH_NORMAL := Color(1, 0.855, 0.6)
 const POUCH_FULL := Color(1, 0.494, 0.372)
 
+const RETICLE_IDLE := Color(1, 1, 1, 0.34)
+const RETICLE_AIMING := Color(1, 1, 1, 0.92)
+## Cyan rather than green: the pods are green and the sand is amber, so both of the obvious
+## choices would camouflage the reticle against the things it has to be read against.
+const RETICLE_LOCKED := Color(0.35, 0.95, 1, 0.97)
+const RETICLE_EMPTY := Color(1, 0.45, 0.38, 0.5)
+
 @onready var stored_label: Label = %Stored
 @onready var pouch_label: Label = %Pouch
 @onready var stance_label: Label = %Stance
 @onready var speed_label: Label = %Speed
 @onready var charge_bar: ProgressBar = %ChargeBar
 @onready var momentum_bar: ProgressBar = %MomentumBar
+@onready var reticle: Label = %Reticle
 
 var _player: Node = null
 
@@ -38,6 +46,39 @@ func _process(_delta: float) -> void:
 	speed_label.text = "Speed   %.1f" % _player.horizontal_speed()
 	charge_bar.value = _player.charge_ratio()
 	momentum_bar.value = _player.momentum_ratio()
+	_update_reticle()
+
+
+## Draw the marker where the seed will actually come down, not at the centre of the screen.
+## The camera is tilted for framing and sits behind the player, so screen centre is nowhere
+## near the line of fire and a fixed crosshair is simply wrong.
+func _update_reticle() -> void:
+	var camera := get_viewport().get_camera_3d()
+	if camera == null:
+		reticle.visible = false
+		return
+
+	var impact: Dictionary = _player.predicted_impact()
+	var point: Vector3 = impact["position"]
+	if camera.is_position_behind(point):
+		reticle.visible = false
+		return
+
+	reticle.visible = true
+	reticle.position = camera.unproject_position(point) - reticle.size * 0.5
+
+	var locked: Node3D = _player.locked_target()
+	if GameState.pouch <= 0:
+		reticle.text = "+"
+		reticle.add_theme_color_override("font_color", RETICLE_EMPTY)
+	elif locked != null:
+		reticle.text = "[ ]"
+		reticle.add_theme_color_override("font_color", RETICLE_LOCKED)
+	else:
+		reticle.text = "+"
+		reticle.add_theme_color_override(
+			"font_color", RETICLE_AIMING if _player.is_aiming() else RETICLE_IDLE
+		)
 
 
 func _on_pouch_changed(pouch: int, capacity: int) -> void:

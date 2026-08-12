@@ -87,6 +87,15 @@ const SCURRY_SHAPE_RADIUS := 0.26
 @export var spit_cooldown := 0.32
 ## Pushed clear of the snout so the shot does not spawn inside the player's own head.
 @export var spit_muzzle_offset := 0.22
+## The arc lives here rather than on the projectile, because the reticle and the lock-on
+## have to predict with exactly the numbers the shot will fly with.
+@export var spit_speed := 30.0
+@export var spit_gravity := 6.0
+
+@export_group("Lock-on")
+@export var lock_range := 45.0
+## How far off the centre of view a target may sit, as a dot product against the aim.
+@export var lock_cone := 0.45
 
 @export_group("Pouch")
 ## Full cheeks make you heavier off the ground. Deliberately small: the conversion gap is
@@ -155,6 +164,7 @@ var _spawn_transform: Transform3D
 var _cheek_scale := 1.0
 var _spit_timer := 0.0
 var _spit_kick := 0.0
+var _locked: Node3D = null
 
 @onready var collision: CollisionShape3D = $Collision
 @onready var head_room: ShapeCast3D = $HeadRoom
@@ -193,6 +203,9 @@ func _physics_process(delta: float) -> void:
 	# running fast.
 	if Input.is_action_just_pressed("spit") and state != State.HOP_DRUM:
 		_try_spit()
+	if Input.is_action_just_pressed("lock_target"):
+		_toggle_lock()
+	_validate_lock()
 
 	var input_dir := _input_direction()
 
@@ -387,7 +400,7 @@ func _launch(input_dir: Vector3) -> void:
 	_set_state(State.HOP_AIR)
 
 
-## Spend a cheek seed to fire one along the camera's aim. Aimed rather than fired straight
+## Spend a cheek seed to fire one along the current aim. Aimed rather than fired straight
 ## ahead, because the pods worth shooting are hung where you cannot walk.
 func _try_spit() -> void:
 	if _spit_timer > 0.0 or spit_scene == null:
@@ -396,9 +409,11 @@ func _try_spit() -> void:
 		return
 	_spit_timer = spit_cooldown
 
-	var dir: Vector3 = cam_pivot.aim_direction()
-	var origin: Vector3 = snout.global_position + dir * spit_muzzle_offset
-	var shot: Node3D = spit_scene.instantiate()
+	var dir := spit_aim_direction()
+	var origin := spit_muzzle()
+	var shot: SeedShot = spit_scene.instantiate()
+	shot.speed = spit_speed
+	shot.shot_gravity = spit_gravity
 	get_parent().add_child(shot)
 	shot.launch(origin, dir, get_rid())
 
@@ -407,7 +422,109 @@ func _try_spit() -> void:
 	if flat.length() > 0.01:
 		facing = flat.normalized()
 	_spit_kick = 1.0
+	cam_pivot.kick()
 	spat.emit(origin, dir)
+
+
+func spit_muzzle() -> Vector3:
+	return snout.global_position + spit_aim_direction() * spit_muzzle_offset
+
+
+## A locked target overrides where you are looking and solves its own arc. Free aim is the
+## expressive option; the lock exists for when the camera is fighting you.
+func spit_aim_direction() -> Vector3:
+	if _locked != null and is_instance_valid(_locked):
+		return Ballistics.direction_to(
+			snout.global_position, _locked.global_position, spit_speed, spit_gravity
+		)
+	return cam_pivot.aim_direction()
+
+
+## Where the next shot would actually land. The reticle draws here, and the harness checks
+## it against a real shot, so the marker cannot quietly start lying again.
+func predicted_impact() -> Dictionary:
+	return Ballistics.trace(
+		get_world_3d(),
+		spit_muzzle(),
+		spit_aim_direction(),
+		spit_speed,
+		spit_gravity,
+		[get_rid()]
+	)
+
+
+func locked_target() -> Node3D:
+	return _locked if _locked != null and is_instance_valid(_locked) else null
+
+
+func is_aiming() -> bool:
+	return cam_pivot.aiming
+
+
+func _toggle_lock() -> void:
+	if locked_target() != null:
+		_locked = null
+		return
+	_locked = _find_lock_target()
+
+
+func _find_lock_target() -> Node3D:
+	var origin: Vector3 = snout.global_position
+	var forward: Vector3 = cam_pivot.aim_direction()
+	var best: Node3D = null
+	var best_score := -INF
+
+	for node in get_tree().get_nodes_in_group("spittable"):
+		var target := node as Node3D
+		if not _is_lockable(target):
+			continue
+		var offset := target.global_position - origin
+		var distance := offset.length()
+		if distance > lock_range or distance < 0.1:
+			continue
+		var alignment := (offset / distance).dot(forward)
+		if alignment < lock_cone:
+			continue
+		if not _can_reach(target):
+			continue
+		# Centre of view dominates, with nearer targets breaking ties.
+		var score := alignment - distance / lock_range * 0.3
+		if score > best_score:
+			best_score = score
+			best = target
+
+	return best
+
+
+func _is_lockable(target: Node3D) -> bool:
+	if target == null or not target.is_inside_tree():
+		return false
+	# A burst pod or a thrown latch is still a node, but it is no longer worth a seed.
+	if target.has_method("is_spittable"):
+		return target.is_spittable()
+	return true
+
+
+## Whether the solved arc actually connects, rather than whether a straight line does. The
+## seed travels a curve, so a target with clear line of sight can still be unreachable, and
+## locking onto one would promise a hit the shot cannot deliver.
+func _can_reach(target: Node3D) -> bool:
+	var origin: Vector3 = snout.global_position
+	var dir := Ballistics.direction_to(origin, target.global_position, spit_speed, spit_gravity)
+	var result := Ballistics.trace(
+		get_world_3d(), origin + dir * spit_muzzle_offset, dir, spit_speed, spit_gravity, [get_rid()]
+	)
+	return result["collider"] == target
+
+
+func _validate_lock() -> void:
+	if _locked == null:
+		return
+	if not _is_lockable(_locked):
+		_locked = null
+		return
+	if snout.global_position.distance_to(_locked.global_position) > lock_range:
+		_locked = null
 
 
 func _pouch_weight() -> float:

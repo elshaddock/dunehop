@@ -26,6 +26,10 @@ func _ready() -> void:
 		push_warning("SpitLatch at %s has no gate to open." % global_position)
 
 
+func is_spittable() -> bool:
+	return not _open
+
+
 func on_spit(_from: Vector3) -> void:
 	if _open or gate == null:
 		return

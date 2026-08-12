@@ -6,5 +6,7 @@
 build/
 export_presets.cfg
 
-# Visual-check renders produced by tests/shots.tscn
+# Visual-check renders produced by tests/shots.tscn, and the import sidecars Godot writes
+# for them. Neither is worth tracking when the images themselves never land in the repo.
 tests/shot_*.png
+tests/shot_*.png.import

@@ -36,6 +36,12 @@ func _ready() -> void:
 	add_child(_regrow_timer)
 
 
+## A burst pod is still a node in the tree, so the lock-on has to be told it is not worth a
+## seed until it has grown back.
+func is_spittable() -> bool:
+	return not _burst
+
+
 func on_spit(_from: Vector3) -> void:
 	if _burst:
 		return

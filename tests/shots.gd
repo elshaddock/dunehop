@@ -82,6 +82,10 @@ func _ready() -> void:
 	cam.look_at(Vector3(-6, 0, -18))
 	await capture("overview")
 
+	# Aim mode, shot through the player's own camera so the framing and the reticle are the
+	# real thing rather than a staged approximation.
+	await aim_shots()
+
 	get_tree().quit()
 
 
@@ -95,6 +99,39 @@ func portrait(name: String, offset: Vector3) -> void:
 	cam.global_position = player.global_position + offset
 	cam.look_at(focus)
 	await capture(name)
+
+
+func aim_shots() -> void:
+	var pod: Node3D = get_node_or_null("Main/Pods/PodPad")
+	if pod == null:
+		return
+
+	var rig: Node = player.get_node("CamPivot")
+	var player_cam: Camera3D = rig.get_node("SpringArm3D/Camera3D")
+	player.global_position = Vector3(-12.0, 0.4, -11.0)
+	set_stance(1, 2)
+	GameState.pocket_seeds(4)
+	await settle(20)
+
+	# Look straight at the pod, the way a player would. Free aim then shows the reticle
+	# sitting below it by the drop; locking snaps the reticle onto it.
+	var muzzle: Vector3 = player.get_node("Body/Head/Snout").global_position
+	var dir := (pod.global_position - muzzle).normalized()
+	rig.set("_yaw", atan2(-dir.x, -dir.z))
+	rig.set("_pitch", atan2(dir.y, Vector3(dir.x, 0.0, dir.z).length()))
+	player_cam.make_current()
+
+	Input.action_press("aim")
+	await settle(70)
+	await capture("aim_mode")
+
+	Input.action_press("lock_target")
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	Input.action_release("lock_target")
+	await settle(30)
+	await capture("aim_locked")
+	Input.action_release("aim")
 
 
 func capture(name: String) -> void:

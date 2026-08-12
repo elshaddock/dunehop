@@ -9,7 +9,7 @@ extends Node
 
 const ACTIONS := [
 	"move_forward", "move_back", "move_left", "move_right",
-	"leap", "swap_stance", "drum", "tail_twist", "spit",
+	"leap", "swap_stance", "drum", "tail_twist", "spit", "aim", "lock_target",
 ]
 
 const STANCE_SCURRY := 0
@@ -63,6 +63,12 @@ func run_all() -> void:
 	await check_full_pouch_refuses_pickups()
 	await check_burrow_banks_the_pouch()
 	await check_pod_pays_back_the_shot()
+	await check_reticle_predicts_the_impact()
+	await check_spit_carries_a_useful_distance()
+	await check_lock_finds_a_target_and_hits_it()
+	await check_locked_reticle_marks_the_target()
+	await check_lock_ignores_a_spent_target()
+	await check_aiming_reframes_the_camera()
 	await check_gate_blocks_the_stash()
 	await check_latch_drops_the_gate()
 	await check_open_gate_admits_the_player()
@@ -316,6 +322,127 @@ func check_pod_pays_back_the_shot() -> void:
 	)
 
 
+## The whole reason the spit felt unaimable was that the marker on screen pointed at a place
+## the seed never passed through. Prediction and reality have to be the same thing.
+func check_reticle_predicts_the_impact() -> void:
+	await reset(Vector3(0, 0.4, 4.0), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	# Angled down so it strikes the plaza, which tests the prediction against a real surface
+	# rather than against a shot expiring in mid-air over the void.
+	await aim_along(Vector3(0.35, -0.15, -1.0).normalized())
+
+	var predicted: Vector3 = player.predicted_impact()["position"]
+	var actual := await fire_and_track()
+	var error := predicted.distance_to(actual) if actual != Vector3.INF else INF
+	report(
+		"the reticle marks where the seed actually lands",
+		error < 0.35,
+		"predicted %.2v, hit %.2v, off by %.2f" % [predicted, actual, error]
+	)
+
+
+func check_spit_carries_a_useful_distance() -> void:
+	# Down the runway, which is the only surface long enough to catch a level shot.
+	await reset(Vector3(0, 0.4, -15.0), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	await aim_along(Vector3(0.0, 0.0, -1.0))
+	var muzzle: Vector3 = player.spit_muzzle()
+	var actual := await fire_and_track()
+	var carried := (
+		Vector3(actual.x - muzzle.x, 0.0, actual.z - muzzle.z).length()
+		if actual != Vector3.INF
+		else 0.0
+	)
+	report(
+		"a level spit carries a useful distance before dropping",
+		carried > 15.0,
+		"%.1f units" % carried
+	)
+
+
+func check_lock_finds_a_target_and_hits_it() -> void:
+	var pod: Node3D = get_node_or_null("Main/Pods/PodLedge")
+	if pod == null:
+		report("a locked spit hits without manual aim", false, "no PodLedge in the level")
+		return
+
+	await reset(Vector3(0, 0.4, 30.0), STANCE_HOP)
+	GameState.pocket_seeds(3)
+	# Look roughly at it, badly, then let the lock do the work.
+	await aim_along(Vector3(0.25, -0.1, 1.0).normalized())
+	await press_tap("lock_target")
+	var locked: Node3D = player.locked_target()
+
+	var hit_node: Node3D = null
+	if locked != null:
+		await press_tap("spit")
+		for i in 180:
+			await get_tree().physics_frame
+			if not pod.is_spittable():
+				hit_node = pod
+				break
+	report(
+		"lock-on acquires a pod and the spit hits it without manual aim",
+		locked == pod and hit_node == pod,
+		"locked=%s burst=%s" % [locked, hit_node != null]
+	)
+
+
+## Locking is only trustworthy if the marker agrees the shot reaches the thing you locked.
+func check_locked_reticle_marks_the_target() -> void:
+	var pod: Node3D = get_node_or_null("Main/Pods/PodPad")
+	if pod == null:
+		report("the locked reticle sits on the locked target", false, "no PodPad in the level")
+		return
+
+	await reset(Vector3(-12.0, 0.4, -11.0), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	await aim_along((pod.global_position - player.global_position).normalized())
+	await press_tap("lock_target")
+
+	var locked: Node3D = player.locked_target()
+	var impact: Dictionary = player.predicted_impact()
+	report(
+		"the locked reticle sits on the locked target",
+		locked == pod and impact["collider"] == pod,
+		"locked=%s reticle hits=%s at %.2v" % [locked, impact["collider"], impact["position"]]
+	)
+
+
+func check_lock_ignores_a_spent_target() -> void:
+	# The pod burst by the previous check is still a node, and locking onto an empty husk
+	# would waste seeds on nothing.
+	await reset(Vector3(0, 0.4, 30.0), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	await aim_along(Vector3(0.0, 0.1, 1.0).normalized())
+	await press_tap("lock_target")
+	var locked: Node3D = player.locked_target()
+	report(
+		"lock-on skips a pod that has already been burst",
+		locked == null or locked.is_spittable(),
+		"locked=%s" % locked
+	)
+
+
+func check_aiming_reframes_the_camera() -> void:
+	await reset(Vector3(0, 0.4, 0), STANCE_HOP)
+	var rig: Node = player.get_node("CamPivot")
+	var arm: SpringArm3D = rig.get_node("SpringArm3D")
+	var resting: float = arm.spring_length
+	Input.action_press("aim")
+	await steps(40)
+	var aimed: float = arm.spring_length
+	var shoulder: float = arm.position.x
+	var aiming: bool = rig.aiming
+	release_all()
+	await steps(40)
+	report(
+		"holding aim pulls the camera in over the shoulder",
+		aiming and aimed < resting - 1.0 and shoulder > 0.4,
+		"arm %.2f -> %.2f, shoulder %.2f" % [resting, aimed, shoulder]
+	)
+
+
 ## Must run before the latch check, which opens the gate for good.
 func check_gate_blocks_the_stash() -> void:
 	await reset(Vector3(6.0, 0.4, -9.0), STANCE_SCURRY)
@@ -486,30 +613,46 @@ func settle(max_frames: int) -> Dictionary:
 	return {"pos": pos, "on_ledge": pos.y > 2.5 and pos.z > LEDGE_Z - 0.5}
 
 
-## Point the rig so a spit passes through a world position, solving for the flat trajectory
-## rather than aiming straight at it: the shot arcs, and over the distances the level uses
-## the drop is bigger than the targets are.
+## Point the rig so a spit passes through a world position, using the same solver the game
+## uses rather than a second copy that could drift away from it.
 func aim_at(target: Vector3) -> void:
-	var rig: Node = player.get_node("CamPivot")
-	var shot: Node = load("res://scenes/seed_shot.tscn").instantiate()
-	var v: float = shot.speed
-	var g: float = shot.shot_gravity
-	shot.free()
-
 	var muzzle: Vector3 = player.get_node("Body/Head/Snout").global_position
-	var delta := target - muzzle
-	var flat := Vector3(delta.x, 0.0, delta.z)
-	var d := flat.length()
-	var h := delta.y
+	var dir := Ballistics.direction_to(muzzle, target, player.spit_speed, player.spit_gravity)
+	await aim_along(dir)
 
-	var pitch := atan2(h, d)
-	var disc := v * v * v * v - g * (g * d * d + 2.0 * h * v * v)
-	if disc >= 0.0 and d > 0.01:
-		pitch = atan2(v * v - sqrt(disc), g * d)
 
-	rig.set("_yaw", atan2(-delta.x, -delta.z))
-	rig.set("_pitch", pitch)
+func aim_along(dir: Vector3) -> void:
+	var rig: Node = player.get_node("CamPivot")
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	rig.set("_yaw", atan2(-dir.x, -dir.z))
+	rig.set("_pitch", atan2(dir.y, flat.length()))
 	await get_tree().physics_frame
+
+
+## Fire one seed and report where it came down, or INF if it never reported an impact.
+## The result travels out through an Array because GDScript lambdas capture by value, so
+## assigning to a captured local would only ever update the lambda's own copy.
+func fire_and_track() -> Vector3:
+	# The previous check's shot can still be fading out in the group, and it has already
+	# emitted its impact, so grabbing the first entry can mean waiting forever on a spent one.
+	var existing := get_tree().get_nodes_in_group("seed_shot")
+	await press_tap("spit")
+
+	var shot: SeedShot = null
+	for node in get_tree().get_nodes_in_group("seed_shot"):
+		if node not in existing:
+			shot = node
+			break
+	if shot == null:
+		return Vector3.INF
+
+	var landed: Array[Vector3] = []
+	shot.impacted.connect(func(point: Vector3, _collider: Node3D) -> void: landed.append(point))
+	for i in 300:
+		await get_tree().physics_frame
+		if not landed.is_empty():
+			return landed[0]
+	return Vector3.INF
 
 
 func count_shots() -> int:
@@ -534,6 +677,10 @@ func reset(pos: Vector3, stance: int) -> void:
 	var rig: Node = player.get_node("CamPivot")
 	rig.set("_yaw", 0.0)
 	rig.set("_pitch", 0.0)
+	# A cooldown or a lock left over from the previous check would silently swallow the next
+	# shot, which reads as a broken mechanic rather than as a dirty fixture.
+	player._spit_timer = 0.0
+	player._locked = null
 	player.velocity = Vector3.ZERO
 	player.global_position = pos
 	player.momentum_speed = 0.0

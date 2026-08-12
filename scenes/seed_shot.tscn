@@ -3,16 +3,16 @@
 [ext_resource type="Script" path="res://scripts/seed_shot.gd" id="1_shot"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_shot"]
-albedo_color = Color(0.976, 0.847, 0.482, 1)
-roughness = 0.55
+albedo_color = Color(1, 0.906, 0.573, 1)
+roughness = 0.4
 emission_enabled = true
-emission = Color(0.988, 0.804, 0.353, 1)
-emission_energy_multiplier = 0.9
+emission = Color(1, 0.812, 0.365, 1)
+emission_energy_multiplier = 2.6
 
 [sub_resource type="CapsuleMesh" id="CapsuleMesh_shot"]
 material = SubResource("StandardMaterial3D_shot")
-radius = 0.055
-height = 0.22
+radius = 0.085
+height = 0.42
 
 [node name="SeedShot" type="Node3D"]
 script = ExtResource("1_shot")
