@@ -70,12 +70,38 @@ func _ready() -> void:
 	cam.look_at(Vector3(9.4, 1.9, -9.0))
 	await capture("stash_latch")
 
+	# The cracked slab, at the angle you first walk up to it, to check the fracture reads as
+	# breakable before anything has told you that it is.
+	player.global_position = Vector3(4.5, 0.4, 5.0)
+	await settle(30)
+	cam.global_position = Vector3(4.4, 2.9, 3.6)
+	cam.look_at(Vector3(9, 0, 8))
+	await capture("cracked_slab")
+
 	# A pod hung off the camera tower, out of reach on purpose.
 	player.global_position = Vector3(-6.0, 0.4, -14.0)
 	await settle(30)
 	cam.global_position = Vector3(-6.2, 2.2, -16.5)
 	cam.look_at(Vector3(-6, 4.6, -9.2))
 	await capture("seed_pod")
+
+	# The toll mid-payment, so the bar and the sinking barrier are both visible.
+	player.global_position = Vector3(-6.1, 0.4, -10)
+	set_stance(1, 2)
+	GameState.seeds_stored = 20
+	GameState.stored_changed.emit(20)
+	await settle(46)
+	cam.global_position = Vector3(-1.8, 3.4, -14.6)
+	cam.look_at(Vector3(-8.8, 1.0, -10.2))
+	await capture("sanctum_toll")
+
+	# A sunseed, out on the ledge only a converted leap reaches. Step off the toll first or
+	# its panel follows the camera across the level.
+	player.global_position = Vector3(0, 3.4, 49)
+	await settle(20)
+	cam.global_position = Vector3(2.6, 4.6, 56.2)
+	cam.look_at(Vector3(0, 3.9, 53))
+	await capture("sunseed")
 
 	# Whole level from above.
 	cam.global_position = Vector3(46, 62, 30)

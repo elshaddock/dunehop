@@ -56,7 +56,10 @@ func run_all() -> void:
 	await check_high_ledge_needs_full_charge()
 	await check_parasail_reaches_pad()
 	await check_ballistic_misses_pad()
+	await check_a_near_miss_drum_rattles_the_slab()
 	await check_drum_breaks_slab()
+	await check_every_sound_exists()
+	await check_the_glide_wind_loops()
 	await check_spit_spends_a_seed()
 	await check_empty_pouch_cannot_spit()
 	await check_one_seed_is_one_seed()
@@ -72,6 +75,17 @@ func run_all() -> void:
 	await check_gate_blocks_the_stash()
 	await check_latch_drops_the_gate()
 	await check_open_gate_admits_the_player()
+	await check_every_mechanic_hides_a_sunseed()
+	await check_every_sunseed_stands_on_ground()
+	await check_lit_beacons_have_sky_above_them()
+	await check_trail_gap_is_crossable()
+	await check_a_parasail_landing_can_be_stopped()
+	await check_toll_needs_banked_seeds()
+	await check_sanctum_is_shut_before_paying()
+	await check_partial_payment_persists()
+	await check_part_paid_gate_cannot_be_crawled_over()
+	await check_toll_opens_and_admits()
+	await check_a_sunseed_survives_a_fall()
 	await check_full_pouch_still_clears_gap()
 	await check_full_pouch_costs_leap_height()
 	await check_falling_spills_the_pouch()
@@ -206,6 +220,74 @@ func check_ballistic_misses_pad() -> void:
 		"the same leap without parasail falls short of the pad",
 		result.pos.y < 1.5 or result.pos.z > -18.0,
 		"ended z=%.2f y=%.2f" % [result.pos.z, result.pos.y]
+	)
+
+
+## Must run before the slab is broken, since breaking it frees it.
+func check_a_near_miss_drum_rattles_the_slab() -> void:
+	var slab: Node3D = get_node_or_null("Main/CrackedSlab")
+	if slab == null:
+		report("a near-miss drum rattles the slab", false, "no cracked slab in the level")
+		return
+
+	var rest: float = slab.position.y
+	await reset(Vector3(2, 0.4, 4), STANCE_HOP)
+	await steps(10)
+	var span: float = player.global_position.distance_to(slab.global_position)
+	await press_tap("drum")
+
+	var lifted := rest
+	for i in 40:
+		await get_tree().physics_frame
+		lifted = maxf(lifted, slab.position.y)
+	release_all()
+
+	var out_of_range: bool = span > player.drum_radius and span < player.drum_notice_radius
+	report(
+		"a drum landing near the slab rattles it without breaking it",
+		out_of_range and is_instance_valid(slab) and lifted > rest + 0.02,
+		"span=%.2f lift=%.3f alive=%s" % [span, lifted - rest, is_instance_valid(slab)]
+	)
+
+
+## Every sound the game asks for has to be in the bank, and every buffer has to hold samples.
+## A misspelt name or a synth that returns nothing is otherwise silent in every sense.
+func check_every_sound_exists() -> void:
+	var wanted := [
+		"leap", "land", "swap", "drum", "slab_break", "slab_rattle", "wind", "spit",
+		"shot_hit", "pod_burst", "pickup", "pouch_full", "deposit", "toll_tick",
+		"gate_open", "sunseed", "fanfare",
+	]
+	var missing: Array[String] = []
+	var empty: Array[String] = []
+	for name in wanted:
+		if not Sfx.has(name):
+			missing.append(name)
+			continue
+		var voice := Sfx.stream(name)
+		if voice.data.size() < 1000 or voice.get_length() <= 0.01:
+			empty.append(name)
+
+	report(
+		"every sound is synthesised and none of them are empty",
+		missing.is_empty() and empty.is_empty(),
+		"count=%d missing=%s empty=%s" % [Sfx.names().size(), missing, empty]
+	)
+
+
+## The glide is held for seconds at a time. Wind that is not marked as looping would simply
+## stop partway through, which is the sort of thing nobody notices until a playtest.
+func check_the_glide_wind_loops() -> void:
+	var wind := Sfx.stream("wind")
+	var loops: bool = (
+		wind != null
+		and wind.loop_mode == AudioStreamWAV.LOOP_FORWARD
+		and wind.loop_end > wind.loop_begin
+	)
+	report(
+		"the parasail wind is a seamless loop, not a one-shot",
+		loops,
+		"mode=%d span=%d..%d" % [wind.loop_mode, wind.loop_begin, wind.loop_end]
 	)
 
 
@@ -395,7 +477,8 @@ func check_locked_reticle_marks_the_target() -> void:
 		report("the locked reticle sits on the locked target", false, "no PodPad in the level")
 		return
 
-	await reset(Vector3(-12.0, 0.4, -11.0), STANCE_HOP)
+	# West edge of the plaza, clear of the sanctum, with an unobstructed line out to the pad.
+	await reset(Vector3(-14.5, 0.4, -5.0), STANCE_HOP)
 	GameState.pocket_seeds(2)
 	await aim_along((pod.global_position - player.global_position).normalized())
 	await press_tap("lock_target")
@@ -484,6 +567,236 @@ func check_open_gate_admits_the_player() -> void:
 		x > 10.5 and picked > 0,
 		"reached x=%.2f with %d seed(s)" % [x, picked]
 	)
+
+
+## Stood on the toll, just outside the sanctum doorway.
+const TOLL_STAND := Vector3(-6.1, 0.4, -10.0)
+
+
+func warden() -> Node:
+	return get_node_or_null("Main/WardenGate")
+
+
+func check_every_mechanic_hides_a_sunseed() -> void:
+	report(
+		"every mechanic hides a sunseed",
+		GameState.sunseeds_total == 6,
+		"%d registered" % GameState.sunseeds_total
+	)
+
+
+## A sunseed hanging over the void would be counted but unreachable, which reads to a player
+## as a miscount rather than as a missing platform.
+func check_every_sunseed_stands_on_ground() -> void:
+	var space := player.get_world_3d().direct_space_state
+	var stranded: Array[String] = []
+	for node in get_node("Main/Sunseeds").get_children():
+		var seed_node := node as Node3D
+		var from: Vector3 = seed_node.global_position + Vector3.UP * 0.2
+		var query := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 3.0)
+		query.collision_mask = 1
+		if space.intersect_ray(query).is_empty():
+			stranded.append(seed_node.name)
+	report(
+		"every sunseed sits on ground you can stand on",
+		stranded.is_empty(),
+		"stranded: %s" % ("none" if stranded.is_empty() else ", ".join(stranded))
+	)
+
+
+## A beacon under a roof is worse than no beacon: it is invisible from outside and it puts a
+## column of light inside the ceiling. This catches a sunseed left lit that should not be, and
+## would catch roofing something over an existing one later.
+func check_lit_beacons_have_sky_above_them() -> void:
+	var space := player.get_world_3d().direct_space_state
+	var buried: Array[String] = []
+	for node in get_node("Main/Sunseeds").get_children():
+		if not node.beacon:
+			continue
+		var from: Vector3 = node.global_position + Vector3.UP * 0.6
+		var query := PhysicsRayQueryParameters3D.create(from, from + Vector3.UP * 14.0)
+		query.collision_mask = 1
+		if not space.intersect_ray(query).is_empty():
+			buried.append(node.name)
+	report(
+		"every lit beacon has open sky above it",
+		buried.is_empty(),
+		"buried: %s" % ("none" if buried.is_empty() else ", ".join(buried))
+	)
+
+
+## The runway's 13-unit gap had no coverage at all, which makes it the prime suspect for a
+## sunseed that can be counted but never collected.
+func check_trail_gap_is_crossable() -> void:
+	await reset(Vector3(0, 0.4, -30.0), STANCE_SCURRY)
+	Input.action_press("move_forward")
+	for i in 600:
+		await get_tree().physics_frame
+		if player.global_position.z <= -67.0:
+			break
+	var ran_at: float = player.horizontal_speed()
+	await press_tap("swap_stance")
+	await press_tap("leap")
+	var result := await settle(400)
+	release_all()
+	report(
+		"a converted leap crosses the runway's trail gap",
+		result.pos.z < -83.0 and result.pos.y > -1.0,
+		"ran %.1f, landed z=%.2f y=%.2f" % [ran_at, result.pos.z, result.pos.y]
+	)
+
+
+## Regression for the icy landing: above the stance cap, releasing the stick used to apply no
+## friction at all, so a glide landing slid on until it ran out of ledge.
+func check_a_parasail_landing_can_be_stopped() -> void:
+	await reset(Vector3(0, 0.4, 0), STANCE_HOP)
+	# Drop in already gliding at full parasail speed, then ask for nothing at all.
+	player.global_position = Vector3(0, 3.0, 0)
+	player.velocity = Vector3(0, 0, -player.parasail_forward)
+	player.state = 5
+	await steps(10)
+	release_all()
+
+	var stopped_in := -1
+	for i in 90:
+		await get_tree().physics_frame
+		if player.is_on_floor() and player.horizontal_speed() < 0.5:
+			stopped_in = i
+			break
+	report(
+		"a glide landing stops when you let go",
+		stopped_in >= 0,
+		"halted after %d frames at %.2f u/s" % [stopped_in, player.horizontal_speed()]
+	)
+
+
+func check_toll_needs_banked_seeds() -> void:
+	var gate := warden()
+	if gate == null:
+		report("the toll takes nothing when nothing is banked", false, "no WardenGate")
+		return
+
+	await reset(TOLL_STAND, STANCE_HOP)
+	set_stored(0)
+	await steps(90)
+	report(
+		"the toll takes nothing when nothing is banked",
+		not gate.is_open() and gate.paid() == 0,
+		"paid %d/%d open=%s" % [gate.paid(), gate.cost, gate.is_open()]
+	)
+
+
+func check_sanctum_is_shut_before_paying() -> void:
+	await reset(TOLL_STAND, STANCE_SCURRY)
+	set_stored(0)
+	Input.action_press("move_left")
+	await steps(120)
+	var x: float = player.global_position.x
+	release_all()
+	report(
+		"the sanctum is shut until the toll is paid",
+		x > -8.3,
+		"stopped at x=%.2f" % x
+	)
+
+
+## An interrupted payment has to be worth something, or a toll larger than one burrow trip
+## would be impossible to chip away at.
+func check_partial_payment_persists() -> void:
+	var gate := warden()
+	await reset(TOLL_STAND, STANCE_HOP)
+	set_stored(8)
+	await steps(90)
+	var paid_before: int = gate.paid()
+	var left_over: int = GameState.seeds_stored
+
+	# Walk off the toll entirely, then come back and confirm nothing was refunded or lost.
+	await reset(Vector3(0, 0.4, 0), STANCE_HOP)
+	await steps(30)
+	await reset(TOLL_STAND, STANCE_HOP)
+	await steps(30)
+
+	report(
+		"a part-paid toll keeps what it has already been given",
+		paid_before == 8 and left_over == 0 and gate.paid() == 8 and not gate.is_open(),
+		"paid %d/%d, %d still banked" % [gate.paid(), gate.cost, GameState.seeds_stored]
+	)
+
+
+## Regression: the barrier used to sink in proportion to payment, which opened a crawlable
+## gap long before the toll was settled. Scurrying is the shortest the creature ever gets, so
+## it is the shape that would slip through.
+func check_part_paid_gate_cannot_be_crawled_over() -> void:
+	var gate := warden()
+	if gate == null or gate.is_open():
+		report("a part-paid gate cannot be crawled over", false, "gate missing or already open")
+		return
+
+	await reset(TOLL_STAND, STANCE_SCURRY)
+	Input.action_press("move_left")
+	await steps(150)
+	var x: float = player.global_position.x
+	release_all()
+	report(
+		"a part-paid gate cannot be crawled over",
+		x > -8.3 and not gate.is_open(),
+		"paid %d/%d, scurried to x=%.2f" % [gate.paid(), gate.cost, x]
+	)
+
+
+func check_toll_opens_and_admits() -> void:
+	var gate := warden()
+	await reset(TOLL_STAND, STANCE_HOP)
+	# Twelve short of the twenty, on top of the eight already handed over.
+	set_stored(12)
+	await steps(140)
+	var opened: bool = gate.is_open()
+	var spent_all: bool = GameState.seeds_stored == 0
+
+	var found_before: int = GameState.sunseeds_found
+	Input.action_press("move_left")
+	await steps(150)
+	release_all()
+
+	report(
+		"paying the toll opens the sanctum and its sunseed",
+		opened and spent_all and GameState.sunseeds_found == found_before + 1,
+		"open=%s banked=%d sunseeds %d -> %d at x=%.2f" % [
+			opened,
+			GameState.seeds_stored,
+			found_before,
+			GameState.sunseeds_found,
+			player.global_position.x,
+		]
+	)
+
+
+## Seeds scatter when you go down. Progress must not, or every run would be a gamble on the
+## last leap rather than on the next one.
+func check_a_sunseed_survives_a_fall() -> void:
+	var before: int = GameState.sunseeds_found
+	if before <= 0:
+		report("a gathered sunseed survives a fall", false, "nothing gathered yet to lose")
+		return
+
+	await reset(Vector3(0, 0.4, 0), STANCE_HOP)
+	GameState.pocket_seeds(8)
+	player.global_position = Vector3(0, -40, 0)
+	await steps(90)
+	report(
+		"a gathered sunseed survives a fall",
+		GameState.sunseeds_found == before,
+		"%d before, %d after (pouch %d)" % [before, GameState.sunseeds_found, GameState.pouch]
+	)
+
+
+## Test-only: put the banked pool at a known figure. Checks bank real seeds at the burrow,
+## so without this a toll test would inherit whatever the previous one happened to leave.
+func set_stored(count: int) -> void:
+	GameState.spend_stored(GameState.seeds_stored)
+	if count > 0:
+		GameState.seeds_stored = count
+		GameState.stored_changed.emit(count)
 
 
 func check_full_pouch_still_clears_gap() -> void:

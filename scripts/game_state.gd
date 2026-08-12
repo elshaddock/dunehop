@@ -7,20 +7,29 @@ extends Node
 ## it scatters if you fall. Stored seeds are what you have carried home to a burrow, and
 ## those can never be lost.
 ##
-## There is deliberately no fixed "collect them all" denominator. Spit turns seeds into
-## ammunition and pods turn ammunition back into seeds, so the number in the world is not a
-## constant and pretending otherwise would just produce a counter that lies.
+## There is deliberately no fixed "collect them all" denominator for seeds. Spit turns seeds
+## into ammunition and pods turn ammunition back into seeds, so the number in the world is
+## not a constant and pretending otherwise would just produce a counter that lies.
+##
+## Sunseeds are the opposite kind of thing and are tracked separately for that reason. They
+## are fixed, finite and permanent, so they can carry a real denominator and act as the
+## measure of progress. Seeds are the currency; sunseeds are the score.
 
 signal pouch_changed(pouch: int, capacity: int)
 signal stored_changed(stored: int)
 signal pickup_refused()
 signal seeds_deposited(count: int)
+signal sunseeds_changed(found: int, total: int)
+signal all_sunseeds_found()
 
 ## Seeds placed in the level at load. Kept for reference, not shown as a denominator.
 var seeds_total: int = 0
 var seeds_stored: int = 0
 var pouch: int = 0
 var pouch_capacity: int = 8
+
+var sunseeds_found: int = 0
+var sunseeds_total: int = 0
 
 
 func register_seed() -> void:
@@ -66,6 +75,29 @@ func spend_seed() -> bool:
 	return true
 
 
+## Draw from the banked pool. Tolls take seeds one at a time so a payment can be interrupted
+## halfway and still have meant something, rather than being all-or-nothing.
+func spend_stored(count: int) -> int:
+	var taken := mini(count, seeds_stored)
+	if taken <= 0:
+		return 0
+	seeds_stored -= taken
+	stored_changed.emit(seeds_stored)
+	return taken
+
+
+func register_sunseed() -> void:
+	sunseeds_total += 1
+	sunseeds_changed.emit(sunseeds_found, sunseeds_total)
+
+
+func collect_sunseed() -> void:
+	sunseeds_found += 1
+	sunseeds_changed.emit(sunseeds_found, sunseeds_total)
+	if sunseeds_found >= sunseeds_total and sunseeds_total > 0:
+		all_sunseeds_found.emit()
+
+
 func deposit_pouch() -> int:
 	if pouch <= 0:
 		return 0
@@ -108,5 +140,8 @@ func reset_counts() -> void:
 	seeds_total = 0
 	seeds_stored = 0
 	pouch = 0
+	sunseeds_found = 0
+	sunseeds_total = 0
 	pouch_changed.emit(pouch, pouch_capacity)
 	stored_changed.emit(seeds_stored)
+	sunseeds_changed.emit(sunseeds_found, sunseeds_total)

@@ -65,6 +65,9 @@ func _try_take() -> void:
 		return
 
 	set_deferred("monitoring", false)
+	# Climbs as the cheeks fill, so a run of pickups rises and you can hear how close to full
+	# you are without taking your eyes off the ground.
+	Sfx.play("pickup", -13.0, lerpf(0.95, 1.52, GameState.pouch_ratio()))
 
 	# Never tween all the way to zero: a zero scale makes the transform basis singular and
 	# the physics server floods the log trying to invert it.
@@ -79,6 +82,7 @@ func _refuse() -> void:
 	if _refusing:
 		return
 	_refusing = true
+	Sfx.play("pouch_full", -14.0)
 	var tween := create_tween()
 	tween.tween_property(self, "scale", Vector3.ONE * 1.4, 0.09)
 	tween.tween_property(self, "scale", Vector3.ONE, 0.14)

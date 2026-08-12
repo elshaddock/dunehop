@@ -35,6 +35,8 @@ func on_spit(_from: Vector3) -> void:
 		return
 	_open = true
 	_light()
+	Sfx.play_at("toll_tick", global_position, -6.0, 1.35)
+	Sfx.play_at("gate_open", gate.global_position, -6.0, 1.15)
 
 	var tween := create_tween()
 	tween.set_ease(Tween.EASE_IN_OUT)

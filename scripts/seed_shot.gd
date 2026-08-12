@@ -81,6 +81,8 @@ func _finish(point: Vector3, collider: Node3D) -> void:
 	_spent = true
 	impacted.emit(point, collider)
 	_puff(point)
+	if collider != null:
+		Sfx.play_at("shot_hit", point, -11.0, randf_range(0.9, 1.15))
 
 	# Never scale to exactly zero: a zero basis is singular and the servers complain loudly
 	# when they try to invert it.
