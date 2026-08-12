@@ -53,10 +53,38 @@ func _ready() -> void:
 	cam.look_at(Vector3(0, 2.0, 46.0))
 	await capture("conversion_gap")
 
+	# The burrow, with full cheeks so the pouch swelling is visible.
+	GameState.pocket_seeds(GameState.pouch_capacity)
+	player.global_position = Vector3(-7.5, 0.4, 12.5)
+	set_stance(1, 2)
+	await settle(30)
+	cam.global_position = Vector3(-5.0, 2.6, 15.5)
+	cam.look_at(Vector3(-10, 0.3, 10))
+	await capture("burrow")
+
+	# The latch-gated stash hut, seen from where you would stand to spit at it.
+	GameState.clear_pouch()
+	player.global_position = Vector3(3.0, 0.4, -9.0)
+	await settle(30)
+	cam.global_position = Vector3(1.0, 2.2, -8.6)
+	cam.look_at(Vector3(9.4, 1.9, -9.0))
+	await capture("stash_latch")
+
+	# A pod hung off the camera tower, out of reach on purpose.
+	player.global_position = Vector3(-6.0, 0.4, -14.0)
+	await settle(30)
+	cam.global_position = Vector3(-6.2, 2.2, -16.5)
+	cam.look_at(Vector3(-6, 4.6, -9.2))
+	await capture("seed_pod")
+
 	# Whole level from above.
 	cam.global_position = Vector3(46, 62, 30)
 	cam.look_at(Vector3(-6, 0, -18))
 	await capture("overview")
+
+	# Aim mode, shot through the player's own camera so the framing and the reticle are the
+	# real thing rather than a staged approximation.
+	await aim_shots()
 
 	get_tree().quit()
 
@@ -71,6 +99,39 @@ func portrait(name: String, offset: Vector3) -> void:
 	cam.global_position = player.global_position + offset
 	cam.look_at(focus)
 	await capture(name)
+
+
+func aim_shots() -> void:
+	var pod: Node3D = get_node_or_null("Main/Pods/PodPad")
+	if pod == null:
+		return
+
+	var rig: Node = player.get_node("CamPivot")
+	var player_cam: Camera3D = rig.get_node("SpringArm3D/Camera3D")
+	player.global_position = Vector3(-12.0, 0.4, -11.0)
+	set_stance(1, 2)
+	GameState.pocket_seeds(4)
+	await settle(20)
+
+	# Look straight at the pod, the way a player would. Free aim then shows the reticle
+	# sitting below it by the drop; locking snaps the reticle onto it.
+	var muzzle: Vector3 = player.get_node("Body/Head/Snout").global_position
+	var dir := (pod.global_position - muzzle).normalized()
+	rig.set("_yaw", atan2(-dir.x, -dir.z))
+	rig.set("_pitch", atan2(dir.y, Vector3(dir.x, 0.0, dir.z).length()))
+	player_cam.make_current()
+
+	Input.action_press("aim")
+	await settle(70)
+	await capture("aim_mode")
+
+	Input.action_press("lock_target")
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	Input.action_release("lock_target")
+	await settle(30)
+	await capture("aim_locked")
+	Input.action_release("aim")
 
 
 func capture(name: String) -> void:

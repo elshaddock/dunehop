@@ -1,0 +1,31 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/seed_pod.gd" id="1_pod"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_pod"]
+albedo_color = Color(0.373, 0.616, 0.353, 1)
+roughness = 0.7
+emission_enabled = true
+emission = Color(0.514, 0.792, 0.4, 1)
+emission_energy_multiplier = 0.45
+
+[sub_resource type="SphereMesh" id="SphereMesh_pod"]
+material = SubResource("StandardMaterial3D_pod")
+radius = 0.42
+height = 0.98
+radial_segments = 10
+rings = 6
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_pod"]
+radius = 0.46
+
+[node name="SeedPod" type="StaticBody3D"]
+collision_layer = 2
+collision_mask = 0
+script = ExtResource("1_pod")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("SphereMesh_pod")
+
+[node name="Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("SphereShape3D_pod")

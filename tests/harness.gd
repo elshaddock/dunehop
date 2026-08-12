@@ -9,7 +9,7 @@ extends Node
 
 const ACTIONS := [
 	"move_forward", "move_back", "move_left", "move_right",
-	"leap", "swap_stance", "drum", "tail_twist",
+	"leap", "swap_stance", "drum", "tail_twist", "spit", "aim", "lock_target",
 ]
 
 const STANCE_SCURRY := 0
@@ -57,6 +57,24 @@ func run_all() -> void:
 	await check_parasail_reaches_pad()
 	await check_ballistic_misses_pad()
 	await check_drum_breaks_slab()
+	await check_spit_spends_a_seed()
+	await check_empty_pouch_cannot_spit()
+	await check_one_seed_is_one_seed()
+	await check_full_pouch_refuses_pickups()
+	await check_burrow_banks_the_pouch()
+	await check_pod_pays_back_the_shot()
+	await check_reticle_predicts_the_impact()
+	await check_spit_carries_a_useful_distance()
+	await check_lock_finds_a_target_and_hits_it()
+	await check_locked_reticle_marks_the_target()
+	await check_lock_ignores_a_spent_target()
+	await check_aiming_reframes_the_camera()
+	await check_gate_blocks_the_stash()
+	await check_latch_drops_the_gate()
+	await check_open_gate_admits_the_player()
+	await check_full_pouch_still_clears_gap()
+	await check_full_pouch_costs_leap_height()
+	await check_falling_spills_the_pouch()
 
 
 # --- checks ------------------------------------------------------------------
@@ -213,6 +231,313 @@ func check_drum_breaks_slab() -> void:
 	)
 
 
+func check_spit_spends_a_seed() -> void:
+	await reset(Vector3(0, 0.4, 0), STANCE_HOP)
+	GameState.pocket_seeds(4)
+	var before: int = GameState.pouch
+	await press_tap("spit")
+	await steps(3)
+	report(
+		"spitting spends a pouch seed",
+		GameState.pouch == before - 1,
+		"pouch %d -> %d" % [before, GameState.pouch]
+	)
+
+
+func check_empty_pouch_cannot_spit() -> void:
+	await reset(Vector3(0, 0.4, 0), STANCE_HOP)
+	var before := count_shots()
+	await press_tap("spit")
+	await steps(3)
+	report(
+		"an empty pouch has nothing to spit",
+		count_shots() == before,
+		"%d shot(s) in flight" % (count_shots() - before)
+	)
+
+
+## Regression guard. Pocketing a seed emits a change signal that every seed listens to in
+## order to re-offer itself, which once let a single seed keep accepting itself until the
+## pouch was full. Nothing else in the suite would notice, since the other pouch checks set
+## their contents by hand.
+func check_one_seed_is_one_seed() -> void:
+	await reset(Vector3(2.0, 0.4, -2.0), STANCE_HOP)
+	var pip: Node3D = load("res://scenes/seed.tscn").instantiate()
+	pip.set("bonus", true)
+	pip.position = Vector3(2.0, 0.9, -2.0)
+	get_node("Main").add_child(pip)
+	await steps(20)
+	report("one seed adds exactly one seed", GameState.pouch == 1, "pouch=%d" % GameState.pouch)
+
+
+func check_full_pouch_refuses_pickups() -> void:
+	await reset(Vector3(-4, 0.4, 0), STANCE_SCURRY)
+	GameState.pocket_seeds(GameState.pouch_capacity)
+	# A seed of our own rather than one from the level, whose fate earlier checks own.
+	var pip: Node3D = load("res://scenes/seed.tscn").instantiate()
+	pip.set("bonus", true)
+	pip.position = Vector3(-4, 0.9, 0)
+	get_node("Main").add_child(pip)
+	await steps(30)
+	report(
+		"a full pouch leaves the seed in the world",
+		is_instance_valid(pip) and GameState.pouch == GameState.pouch_capacity,
+		"seed still there=%s pouch=%d" % [is_instance_valid(pip), GameState.pouch]
+	)
+
+	# Making room must re-offer it without the player having to step off and back on.
+	GameState.spend_seed()
+	await steps(30)
+	report(
+		"freeing pouch space re-offers the refused seed",
+		not is_instance_valid(pip),
+		"pouch=%d" % GameState.pouch
+	)
+
+
+func check_burrow_banks_the_pouch() -> void:
+	await reset(Vector3(-10, 0.4, 10), STANCE_HOP)
+	var stored_before: int = GameState.seeds_stored
+	GameState.pocket_seeds(5)
+	await steps(30)
+	report(
+		"standing on the burrow banks the whole pouch",
+		GameState.pouch == 0 and GameState.seeds_stored == stored_before + 5,
+		"pouch=%d stored %d -> %d" % [GameState.pouch, stored_before, GameState.seeds_stored]
+	)
+
+
+func check_pod_pays_back_the_shot() -> void:
+	await reset(Vector3(-6, 0.4, -14), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	var dropped_before := count_bonus_seeds()
+	await aim_at(Vector3(-6, 4.6, -9.2))
+	await press_tap("spit")
+	await steps(120)
+	var gained := count_bonus_seeds() - dropped_before
+	report(
+		"a spat pod drops back more seeds than the shot cost",
+		gained >= 2,
+		"spent 1, dropped %d" % gained
+	)
+
+
+## The whole reason the spit felt unaimable was that the marker on screen pointed at a place
+## the seed never passed through. Prediction and reality have to be the same thing.
+func check_reticle_predicts_the_impact() -> void:
+	await reset(Vector3(0, 0.4, 4.0), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	# Angled down so it strikes the plaza, which tests the prediction against a real surface
+	# rather than against a shot expiring in mid-air over the void.
+	await aim_along(Vector3(0.35, -0.15, -1.0).normalized())
+
+	var predicted: Vector3 = player.predicted_impact()["position"]
+	var actual := await fire_and_track()
+	var error := predicted.distance_to(actual) if actual != Vector3.INF else INF
+	report(
+		"the reticle marks where the seed actually lands",
+		error < 0.35,
+		"predicted %.2v, hit %.2v, off by %.2f" % [predicted, actual, error]
+	)
+
+
+func check_spit_carries_a_useful_distance() -> void:
+	# Down the runway, which is the only surface long enough to catch a level shot.
+	await reset(Vector3(0, 0.4, -15.0), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	await aim_along(Vector3(0.0, 0.0, -1.0))
+	var muzzle: Vector3 = player.spit_muzzle()
+	var actual := await fire_and_track()
+	var carried := (
+		Vector3(actual.x - muzzle.x, 0.0, actual.z - muzzle.z).length()
+		if actual != Vector3.INF
+		else 0.0
+	)
+	report(
+		"a level spit carries a useful distance before dropping",
+		carried > 15.0,
+		"%.1f units" % carried
+	)
+
+
+func check_lock_finds_a_target_and_hits_it() -> void:
+	var pod: Node3D = get_node_or_null("Main/Pods/PodLedge")
+	if pod == null:
+		report("a locked spit hits without manual aim", false, "no PodLedge in the level")
+		return
+
+	await reset(Vector3(0, 0.4, 30.0), STANCE_HOP)
+	GameState.pocket_seeds(3)
+	# Look roughly at it, badly, then let the lock do the work.
+	await aim_along(Vector3(0.25, -0.1, 1.0).normalized())
+	await press_tap("lock_target")
+	var locked: Node3D = player.locked_target()
+
+	var hit_node: Node3D = null
+	if locked != null:
+		await press_tap("spit")
+		for i in 180:
+			await get_tree().physics_frame
+			if not pod.is_spittable():
+				hit_node = pod
+				break
+	report(
+		"lock-on acquires a pod and the spit hits it without manual aim",
+		locked == pod and hit_node == pod,
+		"locked=%s burst=%s" % [locked, hit_node != null]
+	)
+
+
+## Locking is only trustworthy if the marker agrees the shot reaches the thing you locked.
+func check_locked_reticle_marks_the_target() -> void:
+	var pod: Node3D = get_node_or_null("Main/Pods/PodPad")
+	if pod == null:
+		report("the locked reticle sits on the locked target", false, "no PodPad in the level")
+		return
+
+	await reset(Vector3(-12.0, 0.4, -11.0), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	await aim_along((pod.global_position - player.global_position).normalized())
+	await press_tap("lock_target")
+
+	var locked: Node3D = player.locked_target()
+	var impact: Dictionary = player.predicted_impact()
+	report(
+		"the locked reticle sits on the locked target",
+		locked == pod and impact["collider"] == pod,
+		"locked=%s reticle hits=%s at %.2v" % [locked, impact["collider"], impact["position"]]
+	)
+
+
+func check_lock_ignores_a_spent_target() -> void:
+	# The pod burst by the previous check is still a node, and locking onto an empty husk
+	# would waste seeds on nothing.
+	await reset(Vector3(0, 0.4, 30.0), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	await aim_along(Vector3(0.0, 0.1, 1.0).normalized())
+	await press_tap("lock_target")
+	var locked: Node3D = player.locked_target()
+	report(
+		"lock-on skips a pod that has already been burst",
+		locked == null or locked.is_spittable(),
+		"locked=%s" % locked
+	)
+
+
+func check_aiming_reframes_the_camera() -> void:
+	await reset(Vector3(0, 0.4, 0), STANCE_HOP)
+	var rig: Node = player.get_node("CamPivot")
+	var arm: SpringArm3D = rig.get_node("SpringArm3D")
+	var resting: float = arm.spring_length
+	Input.action_press("aim")
+	await steps(40)
+	var aimed: float = arm.spring_length
+	var shoulder: float = arm.position.x
+	var aiming: bool = rig.aiming
+	release_all()
+	await steps(40)
+	report(
+		"holding aim pulls the camera in over the shoulder",
+		aiming and aimed < resting - 1.0 and shoulder > 0.4,
+		"arm %.2f -> %.2f, shoulder %.2f" % [resting, aimed, shoulder]
+	)
+
+
+## Must run before the latch check, which opens the gate for good.
+func check_gate_blocks_the_stash() -> void:
+	await reset(Vector3(6.0, 0.4, -9.0), STANCE_SCURRY)
+	Input.action_press("move_right")
+	await steps(120)
+	var x: float = player.global_position.x
+	release_all()
+	report("the closed gate keeps you out of the stash", x < 9.1, "stopped at x=%.2f" % x)
+
+
+func check_latch_drops_the_gate() -> void:
+	var gate: Node3D = get_node_or_null("Main/StashGate")
+	if gate == null:
+		report("spitting the latch drops the stash gate", false, "no StashGate in the level")
+		return
+	await reset(Vector3(0, 0.4, -9), STANCE_HOP)
+	GameState.pocket_seeds(2)
+	var before: float = gate.position.y
+	await aim_at(Vector3(8.87, 2.5, -9))
+	await press_tap("spit")
+	await steps(150)
+	report(
+		"spitting the latch drops the stash gate",
+		gate.position.y < before - 1.5,
+		"gate y %.2f -> %.2f" % [before, gate.position.y]
+	)
+
+
+## Proving the gate moved is not the same as proving it granted anything.
+func check_open_gate_admits_the_player() -> void:
+	await reset(Vector3(6.0, 0.4, -9.0), STANCE_SCURRY)
+	Input.action_press("move_right")
+	await steps(150)
+	var x: float = player.global_position.x
+	var picked: int = GameState.pouch
+	release_all()
+	report(
+		"the opened gate admits you to the stashed seeds",
+		x > 10.5 and picked > 0,
+		"reached x=%.2f with %d seed(s)" % [x, picked]
+	)
+
+
+func check_full_pouch_still_clears_gap() -> void:
+	# The gap is dimensioned for an empty pouch. Carrying a full load must cost distance
+	# without silently turning the level's centrepiece into a coin flip.
+	await reset(Vector3(0, 0.4, 14.0), STANCE_SCURRY)
+	GameState.pocket_seeds(GameState.pouch_capacity)
+	Input.action_press("move_back")
+	await run_until_z(TAKEOFF_Z)
+	await press_tap("swap_stance")
+	await press_tap("leap")
+	var result := await settle(300)
+	release_all()
+	report(
+		"a converted leap still clears the gap with full cheeks",
+		result.on_ledge,
+		"pouch=%d landed z=%.2f y=%.2f" % [GameState.pouch, result.pos.z, result.pos.y]
+	)
+
+
+## The gap check above proves a full load still clears, which on its own would also be true
+## if the weight penalty did nothing at all. Measure the apex directly so the cost is known
+## to exist and known to be small.
+func check_full_pouch_costs_leap_height() -> void:
+	var empty := await vertical_leap(Vector3(-15.5, 0.4, 0), 0.75)
+	await reset(Vector3(-15.5, 0.4, 0), STANCE_HOP)
+	GameState.pocket_seeds(GameState.pouch_capacity)
+	var full := await loaded_vertical_leap(Vector3(-15.5, 0.4, 0), 0.75)
+	var loss := empty - full
+	report(
+		"full cheeks cost leap height, but only a little",
+		loss > 0.2 and loss < 0.9,
+		"apex %.2f empty, %.2f full (-%.2f)" % [empty, full, loss]
+	)
+
+
+func check_falling_spills_the_pouch() -> void:
+	await reset(Vector3(0, 0.4, 24), STANCE_HOP)
+	var carried := GameState.pocket_seeds(8)
+	var saved: float = player.kill_y
+	player.kill_y = -14.0
+	player.global_position = Vector3(0, -4.0, 39.0)
+	for i in 300:
+		await get_tree().physics_frame
+		if GameState.pouch < carried:
+			break
+	player.kill_y = saved
+	report(
+		"falling out of the level scatters half the load",
+		GameState.pouch == carried / 2,
+		"carried %d, kept %d" % [carried, GameState.pouch]
+	)
+
+
 # --- driving helpers ---------------------------------------------------------
 
 
@@ -243,6 +568,12 @@ func leap_from(from: Vector3, charge_seconds: float, parasail: bool) -> Dictiona
 ## Measure peak height gained from a standing charged leap.
 func vertical_leap(from: Vector3, charge_seconds: float) -> float:
 	await reset(from, STANCE_HOP)
+	return await loaded_vertical_leap(from, charge_seconds)
+
+
+## Same measurement without the reset, for checks that need to set up a pouch first (reset
+## deliberately empties it).
+func loaded_vertical_leap(_from: Vector3, charge_seconds: float) -> float:
 	await steps(6)
 	var base: float = player.global_position.y
 	Input.action_press("leap")
@@ -282,8 +613,74 @@ func settle(max_frames: int) -> Dictionary:
 	return {"pos": pos, "on_ledge": pos.y > 2.5 and pos.z > LEDGE_Z - 0.5}
 
 
+## Point the rig so a spit passes through a world position, using the same solver the game
+## uses rather than a second copy that could drift away from it.
+func aim_at(target: Vector3) -> void:
+	var muzzle: Vector3 = player.get_node("Body/Head/Snout").global_position
+	var dir := Ballistics.direction_to(muzzle, target, player.spit_speed, player.spit_gravity)
+	await aim_along(dir)
+
+
+func aim_along(dir: Vector3) -> void:
+	var rig: Node = player.get_node("CamPivot")
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	rig.set("_yaw", atan2(-dir.x, -dir.z))
+	rig.set("_pitch", atan2(dir.y, flat.length()))
+	await get_tree().physics_frame
+
+
+## Fire one seed and report where it came down, or INF if it never reported an impact.
+## The result travels out through an Array because GDScript lambdas capture by value, so
+## assigning to a captured local would only ever update the lambda's own copy.
+func fire_and_track() -> Vector3:
+	# The previous check's shot can still be fading out in the group, and it has already
+	# emitted its impact, so grabbing the first entry can mean waiting forever on a spent one.
+	var existing := get_tree().get_nodes_in_group("seed_shot")
+	await press_tap("spit")
+
+	var shot: SeedShot = null
+	for node in get_tree().get_nodes_in_group("seed_shot"):
+		if node not in existing:
+			shot = node
+			break
+	if shot == null:
+		return Vector3.INF
+
+	var landed: Array[Vector3] = []
+	shot.impacted.connect(func(point: Vector3, _collider: Node3D) -> void: landed.append(point))
+	for i in 300:
+		await get_tree().physics_frame
+		if not landed.is_empty():
+			return landed[0]
+	return Vector3.INF
+
+
+func count_shots() -> int:
+	return get_tree().get_nodes_in_group("seed_shot").size()
+
+
+func count_bonus_seeds() -> int:
+	var total := 0
+	for node in get_tree().get_nodes_in_group("seed"):
+		if node.get("bonus"):
+			total += 1
+	return total
+
+
 func reset(pos: Vector3, stance: int) -> void:
 	release_all()
+	# Carried seeds add weight, so leaving them between checks would let one measurement
+	# quietly change the next one.
+	GameState.clear_pouch()
+	# Same reasoning for the rig: aiming a spit rotates it, and movement input is expressed
+	# relative to it, so a stale yaw silently redefines which way "forward" means.
+	var rig: Node = player.get_node("CamPivot")
+	rig.set("_yaw", 0.0)
+	rig.set("_pitch", 0.0)
+	# A cooldown or a lock left over from the previous check would silently swallow the next
+	# shot, which reads as a broken mechanic rather than as a dirty fixture.
+	player._spit_timer = 0.0
+	player._locked = null
 	player.velocity = Vector3.ZERO
 	player.global_position = pos
 	player.momentum_speed = 0.0
