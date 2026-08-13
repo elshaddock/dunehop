@@ -60,6 +60,7 @@ func run_all() -> void:
 	await check_drum_breaks_slab()
 	await check_every_sound_exists()
 	await check_the_glide_wind_loops()
+	await check_the_level_has_music_and_it_loops()
 	await check_spit_spends_a_seed()
 	await check_empty_pouch_cannot_spit()
 	await check_one_seed_is_one_seed()
@@ -288,6 +289,20 @@ func check_the_glide_wind_loops() -> void:
 		"the parasail wind is a seamless loop, not a one-shot",
 		loops,
 		"mode=%d span=%d..%d" % [wind.loop_mode, wind.loop_begin, wind.loop_end]
+	)
+
+
+## A music bed that is not marked as looping simply stops a couple of minutes in and leaves the
+## level silent for the rest of the session, which is easy to miss and miserable to play.
+func check_the_level_has_music_and_it_loops() -> void:
+	var music := get_node_or_null("Main/Music") as AudioStreamPlayer
+	var track: AudioStream = music.stream if music != null else null
+	var length: float = track.get_length() if track != null else 0.0
+	var loops: bool = track != null and track.has_method("has_loop") and track.has_loop()
+	report(
+		"level 1 has a music bed and it loops",
+		music != null and length > 10.0 and loops,
+		"track=%s length=%.1fs loops=%s" % [track != null, length, loops]
 	)
 
 
